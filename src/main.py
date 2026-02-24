@@ -127,6 +127,8 @@ for _ in range(20000):
         state = next_state
 
 # --- FINAL SCHEDULE EXECUTION (ALIGNED WITH TIMELINE) ---
+logger.info(f"Schedule:\n{pd.DataFrame(flights)}")
+
 state = initial_state
 total_profit = 0
 
@@ -179,7 +181,7 @@ for i in range(len(flights)):
         f"{f['origin']}" if p_curr_loc == f["origin"] else f"{f['origin']}*"
     )
 
-    print(
+    logger.info(
         f"{f['id']:<8} | {p_name.upper():<8} | {origin_display:<10} | {f['dest']:<10} | "
         f"{f['start']:>6.0f} | {start_display:<6} | {arrival_time:>6.0f} | ${reward:>8,.0f}"
     )
