@@ -1,0 +1,12 @@
+[project]
+name = "simple-arp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "black>=26.1.0",
+    "isort>=7.0.0",
+    "numpy>=2.4.2",
+    "pandas>=3.0.0",
+]
