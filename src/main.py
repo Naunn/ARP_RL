@@ -90,11 +90,8 @@ def take_step(state, action_idx):
     idle_penalty = idle_time * 5  # $5 per minute waiting
 
     fuel_cost = (reloc_dist + flight_dist) * (fuel_use[p_name] / 100) * FUEL_PRICE
-    revenue = (
-        min(current_flight["pass"], number_of_passengers[p_name])
-        * flight_dist
-        * ticket_price[p_name]
-    )
+    ticket_sale = flight_dist * ticket_price[p_name]
+    revenue = min(current_flight["pass"], number_of_passengers[p_name]) * ticket_sale
 
     reward = revenue - fuel_cost - delay_penalty - idle_penalty
 
