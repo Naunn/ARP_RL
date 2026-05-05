@@ -1,22 +1,54 @@
-plane_assignment ---------------: 2026-03-31 21:38:32,938 INFO Schedule:
+plane_assignment ---------------: 2026-05-04 23:14:42,675 INFO Schedule:
     id  origin    dest  start  pass
 0  101   praga   milan    600    35
-1  102   milan  wieden    650   126
-2  103  wieden   praga    700    51
-3  104   praga  wieden    700   137
-4  105   milan  wieden    710    87
-5  106   milan   praga   1100    99
-plane_assignment ---------------: 2026-03-31 21:38:32,939 INFO 
+1  103   milan  wieden    650   136
+2  104   milan    lodz    660    12
+3  105   milan   praga    665    88
+4  106  wieden   praga    700    51
+5  107   praga  wieden    700   137
+6  108   milan  wieden    710    87
+7  109   milan   praga   1100    99
+plane_assignment ---------------: 2026-05-04 23:14:42,676 INFO 
 ===============================================================================================
-plane_assignment ---------------: 2026-03-31 21:38:32,940 INFO FLIGHT   | PLANE    | ORIGIN     | DEST       | SCHED  | ACTUAL | ARRIVE | PROFIT
-plane_assignment ---------------: 2026-03-31 21:38:32,940 INFO -----------------------------------------------------------------------------------------------
-plane_assignment ---------------: 2026-03-31 21:38:32,955 INFO 101      | BOEING1  | praga*     | milan      |    600 |  600   |    657 | $ -36,365
-plane_assignment ---------------: 2026-03-31 21:38:32,955 INFO 102      | BOEING1  | milan      | wieden     |    650 |  657!  |    709 | $ -14,662
-plane_assignment ---------------: 2026-03-31 21:38:32,955 INFO 103      | BOEING1  | wieden     | praga      |    700 |  709!  |    728 | $ -10,885
-plane_assignment ---------------: 2026-03-31 21:38:32,955 INFO 104      | BOEING1  | praga      | wieden     |    700 |  728!  |    747 | $ -17,984
-plane_assignment ---------------: 2026-03-31 21:38:32,955 INFO 105      | BOEING2  | milan*     | wieden     |    710 |  710   |    763 | $ -55,002
-plane_assignment ---------------: 2026-03-31 21:38:32,955 INFO 106      | BOEING2  | milan*     | praga      |   1100 | 1100   |   1157 | $ -37,245
-plane_assignment ---------------: 2026-03-31 21:38:32,956 INFO -----------------------------------------------------------------------------------------------
-plane_assignment ---------------: 2026-03-31 21:38:32,957 INFO TOTAL SYSTEM PROFIT: $-172,142.43
-plane_assignment ---------------: 2026-03-31 21:38:32,958 INFO (*) Relocation flight required | (!) Flight delayed by plane availability
-plane_assignment ---------------: 2026-03-31 21:38:32,958 INFO ===============================================================================================
+plane_assignment ---------------: 2026-05-04 23:14:42,677 INFO FLIGHT   | PLANE    | ORIGIN     | DEST       | SCHED  | ACTUAL | ARRIVE | PROFIT
+plane_assignment ---------------: 2026-05-04 23:14:42,677 INFO -----------------------------------------------------------------------------------------------
+plane_assignment ---------------: 2026-05-04 23:14:42,694 INFO 101      | BOEING2  | praga      | milan      |    600 |  600   |    657 | $   3,792
+plane_assignment ---------------: 2026-05-04 23:14:42,694 INFO 103      | BOEING1  | milan*     | wieden     |    650 |  650   |    703 | $  45,738
+plane_assignment ---------------: 2026-05-04 23:14:42,694 INFO 104      | BOEING2  | milan      | lodz       |    660 |  660   |    693 | $  -7,517
+plane_assignment ---------------: 2026-05-04 23:14:42,694 INFO 105      | BOEING2  | milan*     | praga      |    665 |  786!  |    842 | $ -46,120
+plane_assignment ---------------: 2026-05-04 23:14:42,694 INFO 106      | BOEING1  | wieden     | praga      |    700 |  703!  |    722 | $   5,588
+plane_assignment ---------------: 2026-05-04 23:14:42,694 INFO 107      | BOEING1  | praga      | wieden     |    700 |  722!  |    741 | $  20,703
+plane_assignment ---------------: 2026-05-04 23:14:42,694 INFO 108      | BOEING1  | milan*     | wieden     |    710 |  793!  |    846 | $ -15,696
+plane_assignment ---------------: 2026-05-04 23:14:42,694 INFO 109      | BOEING1  | milan*     | praga      |   1100 | 1100   |   1157 | $  38,818
+plane_assignment ---------------: 2026-05-04 23:14:42,694 INFO -----------------------------------------------------------------------------------------------
+plane_assignment ---------------: 2026-05-04 23:14:42,695 INFO TOTAL SYSTEM PROFIT: $45,305.67
+plane_assignment ---------------: 2026-05-04 23:14:42,696 INFO (*) Relocation flight required | (!) Flight delayed by plane availability
+plane_assignment ---------------: 2026-05-04 23:14:42,697 INFO ===============================================================================================
+plane_assignment ---------------: 2026-05-04 23:14:42,697 INFO ===============================================================================================
+plane_assignment ---------------: 2026-05-04 23:34:11,583 INFO Schedule:
+    id  origin    dest  start  pass
+0  101   praga   milan    600    35
+1  103   milan  wieden    650   136
+2  104   milan    lodz    660    12
+3  105   milan   praga    665    88
+4  106  wieden   praga    700    51
+5  107   praga  wieden    700   137
+6  108   milan  wieden    710    87
+7  109   milan   praga   1100    99
+plane_assignment ---------------: 2026-05-04 23:34:11,583 INFO 
+===============================================================================================
+plane_assignment ---------------: 2026-05-04 23:34:11,585 INFO FLIGHT   | PLANE    | ORIGIN     | DEST       | SCHED  | ACTUAL | ARRIVE | PROFIT
+plane_assignment ---------------: 2026-05-04 23:34:11,585 INFO -----------------------------------------------------------------------------------------------
+plane_assignment ---------------: 2026-05-04 23:34:11,603 INFO 101      | BOEING2  | praga      | milan      |    600 |  600   |    657 | $   3,792
+plane_assignment ---------------: 2026-05-04 23:34:11,603 INFO 103      | BOEING1  | milan*     | wieden     |    650 |  650   |    703 | $  45,738
+plane_assignment ---------------: 2026-05-04 23:34:11,603 INFO 104      | BOEING2  | milan      | lodz       |    660 |  660   |    693 | $  -7,517
+plane_assignment ---------------: 2026-05-04 23:34:11,603 INFO 105      | BOEING2  | milan*     | praga      |    665 |  786!  |    842 | $ -46,120
+plane_assignment ---------------: 2026-05-04 23:34:11,603 INFO 106      | BOEING1  | wieden     | praga      |    700 |  703!  |    722 | $   5,588
+plane_assignment ---------------: 2026-05-04 23:34:11,603 INFO 107      | BOEING1  | praga      | wieden     |    700 |  722!  |    741 | $  20,703
+plane_assignment ---------------: 2026-05-04 23:34:11,603 INFO 108      | BOEING1  | milan*     | wieden     |    710 |  793!  |    846 | $ -15,696
+plane_assignment ---------------: 2026-05-04 23:34:11,603 INFO 109      | BOEING1  | milan*     | praga      |   1100 | 1100   |   1157 | $  38,818
+plane_assignment ---------------: 2026-05-04 23:34:11,603 INFO -----------------------------------------------------------------------------------------------
+plane_assignment ---------------: 2026-05-04 23:34:11,604 INFO TOTAL SYSTEM PROFIT: $45,305.67
+plane_assignment ---------------: 2026-05-04 23:34:11,605 INFO (*) Relocation flight required | (!) Flight delayed by plane availability
+plane_assignment ---------------: 2026-05-04 23:34:11,606 INFO ===============================================================================================
+plane_assignment ---------------: 2026-05-04 23:34:11,606 INFO ===============================================================================================

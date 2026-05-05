@@ -1,0 +1,36 @@
+DeepAirlines ---------------: 2026-05-04 23:33:22,670 INFO Starting Training...
+DeepAirlines ---------------: 2026-05-04 23:33:28,968 INFO 
+Final Optimized Schedule:
+DeepAirlines ---------------: 2026-05-04 23:33:28,968 INFO --------------------------------------------------------------------------------
+DeepAirlines ---------------: 2026-05-04 23:33:28,969 INFO ID    | ACTION       | RESULT          | REWARD
+DeepAirlines ---------------: 2026-05-04 23:33:28,969 INFO --------------------------------------------------------------------------------
+DeepAirlines ---------------: 2026-05-04 23:33:28,974 INFO 101   | BOEING 2     | ARRIVED @ 657   | $29,486
+DeepAirlines ---------------: 2026-05-04 23:33:28,974 INFO 102   | BOEING 1     | ARRIVED @ 694   | $78,859
+DeepAirlines ---------------: 2026-05-04 23:33:28,974 INFO 103   | BOEING 2     | ARRIVED @ 709   | $106,431
+DeepAirlines ---------------: 2026-05-04 23:33:28,974 INFO 104   | BOEING 2     | ARRIVED @ 795   | $-4,528
+DeepAirlines ---------------: 2026-05-04 23:33:28,974 INFO 105   | BOEING 2     | ARRIVED @ 944   | $51,841
+DeepAirlines ---------------: 2026-05-04 23:33:28,974 INFO 106   | BOEING 2     | ARRIVED @ 983   | $-11,858
+DeepAirlines ---------------: 2026-05-04 23:33:28,975 INFO 107   | BOEING 1     | ARRIVED @ 732   | $37,877
+DeepAirlines ---------------: 2026-05-04 23:33:28,975 INFO 108   | BOEING 1     | ARRIVED @ 837   | $60,757
+DeepAirlines ---------------: 2026-05-04 23:33:28,975 INFO 109   | BOEING 1     | ARRIVED @ 1157  | $83,609
+DeepAirlines ---------------: 2026-05-04 23:33:28,975 INFO --------------------------------------------------------------------------------
+DeepAirlines ---------------: 2026-05-04 23:33:28,977 INFO TOTAL SYSTEM PROFIT: $432,474.24
+DeepAirlines ---------------: 2026-05-04 23:35:09,259 INFO Starting Training...
+DeepAirlines ---------------: 2026-05-04 23:35:15,509 INFO 
+Final Optimized Schedule (Detailed):
+DeepAirlines ---------------: 2026-05-04 23:35:15,510 INFO ==============================================================================================================
+DeepAirlines ---------------: 2026-05-04 23:35:15,511 INFO ID    | PLANE      | FROM (Start) | TO (Origin)  | DEST       | STATUS          | PROFIT
+DeepAirlines ---------------: 2026-05-04 23:35:15,511 INFO --------------------------------------------------------------------------------------------------------------
+DeepAirlines ---------------: 2026-05-04 23:35:15,521 INFO 101   | BOEING 2   | praga        | praga        | milan      | ARRIVED @ 657   | $  29,486
+DeepAirlines ---------------: 2026-05-04 23:35:15,521 INFO 102   | BOEING 1   | lodz         | lodz         | wieden     | ARRIVED @ 694   | $  78,859
+DeepAirlines ---------------: 2026-05-04 23:35:15,521 INFO 103   | BOEING 2   | milan        | milan        | wieden     | ARRIVED @ 709   | $ 106,431
+DeepAirlines ---------------: 2026-05-04 23:35:15,521 INFO 104   | BOEING 2   | wieden       | milan*       | lodz       | ARRIVED @ 795   | $  -4,528
+DeepAirlines ---------------: 2026-05-04 23:35:15,521 INFO 105   | BOEING 2   | lodz         | milan*       | praga      | ARRIVED @ 944   | $  51,841
+DeepAirlines ---------------: 2026-05-04 23:35:15,521 INFO 106   | BOEING 1   | wieden       | wieden       | praga      | ARRIVED @ 719   | $  14,560
+DeepAirlines ---------------: 2026-05-04 23:35:15,521 INFO 107   | BOEING 1   | praga        | praga        | wieden     | ARRIVED @ 738   | $  37,328
+DeepAirlines ---------------: 2026-05-04 23:35:15,522 INFO 108   | BOEING 1   | wieden       | milan*       | wieden     | ARRIVED @ 843   | $  60,130
+DeepAirlines ---------------: 2026-05-04 23:35:15,522 INFO 109   | BOEING 1   | wieden       | milan*       | praga      | ARRIVED @ 1157  | $  83,609
+DeepAirlines ---------------: 2026-05-04 23:35:15,522 INFO --------------------------------------------------------------------------------------------------------------
+DeepAirlines ---------------: 2026-05-04 23:35:15,523 INFO TOTAL SYSTEM PROFIT: $457,715.88
+DeepAirlines ---------------: 2026-05-04 23:35:15,523 INFO (*) Asterisk indicates a relocation flight was required.
+DeepAirlines ---------------: 2026-05-04 23:35:15,523 INFO ==============================================================================================================

@@ -3,20 +3,24 @@ import random
 import numpy as np
 import pandas as pd
 
-from src.log_config import logger
+from src.log_config import get_logger
+
+logger = get_logger("plane_assignment")
 
 # --- DATA SETUP ---
 # Real-world schedule (flights must be sorted by start time)
 flights = [
     {"id": 101, "origin": "praga", "dest": "milan", "start": 600, "pass": 35},
-    {"id": 102, "origin": "milan", "dest": "wieden", "start": 650, "pass": 126},
-    {"id": 103, "origin": "wieden", "dest": "praga", "start": 700, "pass": 51},
-    {"id": 104, "origin": "praga", "dest": "wieden", "start": 700, "pass": 137},
-    {"id": 105, "origin": "milan", "dest": "wieden", "start": 710, "pass": 87},
-    {"id": 106, "origin": "milan", "dest": "praga", "start": 1100, "pass": 99},
+    {"id": 103, "origin": "milan", "dest": "wieden", "start": 650, "pass": 136},
+    {"id": 104, "origin": "milan", "dest": "lodz", "start": 660, "pass": 12},
+    {"id": 105, "origin": "milan", "dest": "praga", "start": 665, "pass": 88},
+    {"id": 106, "origin": "wieden", "dest": "praga", "start": 700, "pass": 51},
+    {"id": 107, "origin": "praga", "dest": "wieden", "start": 700, "pass": 137},
+    {"id": 108, "origin": "milan", "dest": "wieden", "start": 710, "pass": 87},
+    {"id": 109, "origin": "milan", "dest": "praga", "start": 1100, "pass": 99},
 ]
 
-# Distances from LODZ (as you provided) + Inter-city distances
+# Distances from LODZ + Inter-city distances
 # We use a dictionary where (A, B) returns distance
 dist_matrix = {
     # Distances from Lodz (Home)
@@ -40,14 +44,14 @@ dist_matrix = {
 planes = ["boeing1", "boeing2"]
 fuel_use = {"boeing1": 900.0, "boeing2": 900.0}
 number_of_passengers = {"boeing1": 150, "boeing2": 150}
-ticket_price = {"boeing1": 0.1, "boeing2": 0.1}  # per_km
+ticket_price = {"boeing1": 1, "boeing2": 1}  # per_km
 speeds = {"boeing1": 900, "boeing2": 900}
 FUEL_PRICE = 3
 TIME_PENALTY_RATE = 2.0
 
 # --- Q-LEARNING SETUP ---
 # State: (B1_FreeTime, B2_FreeTime, B1_Loc, B2_Loc, FlightIdx)
-initial_state = (0, 0, "lodz", "lodz", 0)
+initial_state = (0, 0, "lodz", "praga", 0)
 actions = [0, 1]
 q_table = {}
 
@@ -188,4 +192,5 @@ for i in range(len(flights)):
 logger.info("-" * 95)
 logger.info(f"TOTAL SYSTEM PROFIT: ${total_profit:,.2f}")
 logger.info("(*) Relocation flight required | (!) Flight delayed by plane availability")
+logger.info("=" * 95)
 logger.info("=" * 95)
