@@ -122,10 +122,11 @@ def get_state_vector(b1_time, b2_time, b1_loc, b2_loc, f_idx):
 
 def step(state_tuple, action, f_idx):
     b1_t, b2_t, b1_l, b2_l = state_tuple
-    f = flights_data[f_idx]
 
     if action == 2:  # CANCEL
         return (b1_t, b2_t, b1_l, b2_l), CANCEL_PENALTY, "CANCELLED"
+
+    f = flights_data[f_idx]
 
     # ASSIGNMENT LOGIC (Action 0 or 1)
     p_time = b1_t if action == 0 else b2_t
@@ -185,6 +186,18 @@ logger.info("-" * 110)
 
 eval_state = (0, 0, "lodz", "praga")  # Initial: B1 @ Lodz, B2 @ Praga
 total_p = 0
+
+flights_data = [
+    {"id": 101, "origin": "lodz", "dest": "milan", "start": 1600, "pass": 5},
+    {"id": 102, "origin": "lodz", "dest": "wieden", "start": 1655, "pass": 36},
+    {"id": 103, "origin": "praga", "dest": "wieden", "start": 1650, "pass": 36},
+    {"id": 104, "origin": "praga", "dest": "lodz", "start": 1660, "pass": 2},
+    {"id": 105, "origin": "milan", "dest": "praga", "start": 1665, "pass": 8},
+    {"id": 106, "origin": "lodz", "dest": "praga", "start": 1700, "pass": 1},
+    {"id": 107, "origin": "praga", "dest": "wieden", "start": 1700, "pass": 37},
+    {"id": 108, "origin": "praga", "dest": "wieden", "start": 1710, "pass": 7},
+    {"id": 109, "origin": "milan", "dest": "praga", "start": 1705, "pass": 9},
+]
 
 for i in range(len(flights_data)):
     # 1. Capture current positions before the action

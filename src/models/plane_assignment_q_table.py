@@ -4,42 +4,32 @@ import numpy as np
 import pandas as pd
 
 from src.log_config import get_logger
+from src.utils.dist import create_dist_dict
 
 logger = get_logger("plane_assignment")
 
 # --- DATA SETUP ---
 # Real-world schedule (flights must be sorted by start time)
 flights = [
-    {"id": 101, "origin": "praga", "dest": "milan", "start": 600, "pass": 35},
-    {"id": 103, "origin": "milan", "dest": "wieden", "start": 650, "pass": 136},
-    {"id": 104, "origin": "milan", "dest": "lodz", "start": 660, "pass": 12},
-    {"id": 105, "origin": "milan", "dest": "praga", "start": 665, "pass": 88},
-    {"id": 106, "origin": "wieden", "dest": "praga", "start": 700, "pass": 51},
+    {"id": 101, "origin": "wieden", "dest": "milan", "start": 600, "pass": 35},
+    {"id": 102, "origin": "lodz", "dest": "milan", "start": 620, "pass": 135},
+    {"id": 103, "origin": "praga", "dest": "wieden", "start": 650, "pass": 136},
+    {"id": 104, "origin": "praga", "dest": "lodz", "start": 660, "pass": 12},
+    {"id": 105, "origin": "lodz", "dest": "praga", "start": 665, "pass": 88},
+    {"id": 106, "origin": "milan", "dest": "praga", "start": 700, "pass": 51},
     {"id": 107, "origin": "praga", "dest": "wieden", "start": 700, "pass": 137},
     {"id": 108, "origin": "milan", "dest": "wieden", "start": 710, "pass": 87},
-    {"id": 109, "origin": "milan", "dest": "praga", "start": 1100, "pass": 99},
+    {"id": 109, "origin": "lodz", "dest": "praga", "start": 1100, "pass": 99},
 ]
+
+all_cities = {city for f in flights for city in (f["origin"], f["dest"])}
+
+# Convert to a sorted list if you need a stable order
+unique_cities = sorted(list(all_cities))
 
 # Distances from LODZ + Inter-city distances
 # We use a dictionary where (A, B) returns distance
-dist_matrix = {
-    # Distances from Lodz (Home)
-    ("lodz", "milan"): 1388,
-    ("lodz", "wieden"): 581,
-    ("lodz", "praga"): 503,
-    # Distances between cities (approximate or calculated)
-    ("praga", "milan"): 849,
-    ("milan", "wieden"): 789,
-    ("wieden", "praga"): 287,
-    ("milan", "praga"): 849,
-    ("wieden", "milan"): 789,
-    ("praga", "wieden"): 287,
-    # Staying put
-    ("lodz", "lodz"): 0,
-    ("milan", "milan"): 0,
-    ("wieden", "wieden"): 0,
-    ("praga", "praga"): 0,
-}
+dist_dict = create_dist_dict(unique_cities)
 
 planes = ["boeing1", "boeing2"]
 fuel_use = {"boeing1": 900.0, "boeing2": 900.0}
@@ -71,10 +61,8 @@ def take_step(state, action_idx):
     p_free_time = b1_time if action_idx == 0 else b2_time
     p_loc = b1_loc if action_idx == 0 else b2_loc
 
-    reloc_dist = dist_matrix.get((p_loc, current_flight["origin"]), 500)
-    flight_dist = dist_matrix.get(
-        (current_flight["origin"], current_flight["dest"]), 500
-    )
+    reloc_dist = dist_dict.get((p_loc, current_flight["origin"]), 500)
+    flight_dist = dist_dict.get((current_flight["origin"], current_flight["dest"]), 500)
 
     reloc_time = reloc_dist / (speeds[p_name] / 60)
     flight_time = flight_dist / (speeds[p_name] / 60)
@@ -139,6 +127,18 @@ logger.info(
 )
 logger.info("-" * 95)
 
+flights = [
+    {"id": 101, "origin": "wieden", "dest": "milan", "start": 600, "pass": 35},
+    {"id": 102, "origin": "lodz", "dest": "milan", "start": 620, "pass": 135},
+    {"id": 103, "origin": "praga", "dest": "wieden", "start": 650, "pass": 136},
+    {"id": 104, "origin": "praga", "dest": "lodz", "start": 660, "pass": 12},
+    {"id": 105, "origin": "lodz", "dest": "praga", "start": 665, "pass": 88},
+    {"id": 106, "origin": "milan", "dest": "praga", "start": 700, "pass": 51},
+    {"id": 107, "origin": "praga", "dest": "wieden", "start": 700, "pass": 137},
+    {"id": 108, "origin": "milan", "dest": "wieden", "start": 710, "pass": 87},
+    {"id": 109, "origin": "lodz", "dest": "praga", "start": 1100, "pass": 99},
+]
+
 for i in range(len(flights)):
     # Determine best assignment from the Q-Table
     action_idx = np.argmax(get_q(state))
@@ -155,14 +155,14 @@ for i in range(len(flights)):
 
     # Calculate the Moving Timeline metrics
     # Relocation
-    reloc_dist = dist_matrix.get((p_curr_loc, f["origin"]), 500)
+    reloc_dist = dist_dict.get((p_curr_loc, f["origin"]), 500)
     reloc_time = reloc_dist / (speeds[p_name] / 60)
 
     # Timeline points
     earliest_at_origin = p_free_time + reloc_time
     actual_start = max(f["start"], earliest_at_origin)
 
-    flight_dist = dist_matrix.get((f["origin"], f["dest"]), 500)
+    flight_dist = dist_dict.get((f["origin"], f["dest"]), 500)
     flight_time = flight_dist / (speeds[p_name] / 60)
     arrival_time = actual_start + flight_time
 
