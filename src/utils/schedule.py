@@ -41,42 +41,56 @@ def generate_random_flights(n, cities, start_time_range, pass_range):
 
 
 def check_global_feasibility(flights, planes, plane_configs, dist_dict):
-    total_flight_time = 0
-    for f in flights:
-        dist = dist_dict.get((f["origin"], f["dest"]), 500)
-        # Use average speed of fleet
-        avg_speed = sum(p["speed"] for p in plane_configs.values()) / len(plane_configs)
-        total_flight_time += dist / (avg_speed / 60)
+    """
+    Analyzes schedule density and fleet capacity.
+    Returns (peak_demand, utilization_percent).
+    """
+    if not flights or not planes:
+        return 0, 0.0
 
-    # Calculate operating window (from first flight start to last flight end-ish)
-    start_time = min(f["start"] for f in flights)
-    end_time = max(f["start"] for f in flights) + 120  # Estimate last flight duration
+    # Calculate Average Fleet Speed
+    avg_speed_km_min = (
+        sum(p["speed"] for p in plane_configs.values()) / len(plane_configs)
+    ) / 60
 
-    available_time = len(planes) * (end_time - start_time)
-
-    utilization = (total_flight_time / available_time) * 100
-    return utilization  # If > 80-90%, it's likely unsolvable due to relocation needs.
-
-
-def calculate_max_concurrency(flights, plane_configs, dist_dict):
     events = []
-    avg_speed = 900 / 60  # km/min
+    total_workload_mins = 0
 
+    # Process Flights into Timeline Events
     for f in flights:
         dist = dist_dict.get((f["origin"], f["dest"]), 500)
-        duration = dist / avg_speed
+        duration = dist / avg_speed_km_min
+        total_workload_mins += duration
 
-        # Add a "Start" event and an "End" event
-        events.append((f["start"], 1))  # Plane becomes busy
-        events.append((f["start"] + duration, -1))  # Plane becomes free
+        # Mark simultaneous demand peaks
+        events.append((f["start"], 1))  # Flight starts
+        events.append((f["start"] + duration, -1))  # Flight ends
 
-    # Sort by time
+    # Calculate Peak Concurrency (The "Bottleneck")
+    # upper bound of the number of planes needed at a single hour
     events.sort()
-
     max_planes_needed = 0
-    current_planes = 0
-    for time, change in events:
-        current_planes += change
-        max_planes_needed = max(max_planes_needed, current_planes)
+    current_active = 0
+    for _, change in events:
+        current_active += change
+        max_planes_needed = max(max_planes_needed, current_active)
 
-    return max_planes_needed
+    # Calculate Global Utilization (The "Time Budget")
+    start_time = min(f["start"] for f in flights)
+    # Give a 2-hour buffer for the final flight to land
+    end_time = max(f["start"] for f in flights) + 120
+
+    # we assume all planes can be used for the whole day (flight time, first start till last start)
+    operating_window = end_time - start_time
+    total_available_mins = len(planes) * operating_window
+
+    # If I spread all the work out perfectly over 24 hours, how busy are my planes?
+    # <20% => not tht busy
+    # >80% => solution without delays may be impossible
+    utilization = (
+        (total_workload_mins / total_available_mins) * 100
+        if total_available_mins > 0
+        else 0
+    )
+
+    return max_planes_needed, utilization

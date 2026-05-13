@@ -1,3 +1,10 @@
+CITIES = ["praga", "milan", "lodz"]
+N_FLIGHTS = 10
+FIRST_FLIGHT_HOUR = 5
+LAST_FLIGHT_HOUR = 23
+MIN_PASS = 100
+MAX_PASS = 180
+
 PLANES_TEMPLATES = {
     "BOEING": {
         "fuel_use": 900.0,

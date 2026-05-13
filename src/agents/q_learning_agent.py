@@ -13,8 +13,9 @@ class QAgent:
         lr=0.1,
         gamma=0.9,
         epsilon=1.0,
-        epsilon_decay=0.9999,
+        epsilon_decay=0.999995,
         min_epsilon=0.01,
+        use_decay=True,
     ):
         """
         Initialize the Q-Learning agent.
@@ -32,6 +33,7 @@ class QAgent:
         self.epsilon_decay = epsilon_decay
         self.min_epsilon = min_epsilon
         self.n_actions = n_actions
+        self.use_decay = use_decay
         self.q_table = {}
 
     def _bucket_state(self, state):
@@ -61,7 +63,8 @@ class QAgent:
         Reduces the exploration rate according to epsilon_decay.
         Call this at the end of each episode.
         """
-        self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+        if self.use_decay:
+            self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
 
     def learn(self, state, action, reward, next_state, done):
         """
