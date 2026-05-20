@@ -1,8 +1,10 @@
-# Shared Python Environment Setup
+# Placeholder
 
-This project uses a shared virtual environment across multiple repositories, managed with `uv`.
+Placeholder
 
 ## Setup
+
+This project is managed with `uv`.
 
 Run the provided script:
 
