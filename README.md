@@ -27,7 +27,7 @@ Windows (PowerShell):
 
 ## Run Project
 
-uv run python main.py
+uv run python -m src.main
 
 ## Add Dependencies
 
