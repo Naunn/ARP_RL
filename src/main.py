@@ -3,6 +3,9 @@ import time
 import numpy as np
 
 from src.agents.q_learning_agent import QAgent
+
+from src.agents.dqn_agent import DQNAgent
+
 from src.config import (
     CITIES,
     FIRST_FLIGHT_HOUR,
@@ -19,6 +22,7 @@ from src.utils.envs import (
     QLearningSolver,
     RandomSolver,
     run_unified_execution,
+    DQNSolver,
 )
 from src.utils.fleet import generate_fleet
 from src.utils.schedule import (
@@ -96,12 +100,15 @@ else:
     )
 
 logger.info("=" * 60)
-# --- INITIALIZE WITH OPTIONS ---
-env = AirlineEnv(FLIGHTS, PLANES, dist_dict, use_clipping=False)
+
+# ==========================================
+# --- LOOP 1: TABULAR Q-LEARNING TRAINING ---
+# ==========================================
+env = AirlineEnv(FLIGHTS, PLANES, dist_dict, cities=CITIES, use_clipping=False)
 agent = QAgent(n_actions=len(env.planes), epsilon=0.2, use_decay=False)
 
 # --- TRAINING SETTINGS ---
-n_episodes = 1_000_000
+n_episodes = 500_000
 log_interval = 10_000
 scores = []
 start_wall_time = time.time()
@@ -141,6 +148,60 @@ for i in range(1, n_episodes + 1):
             f"ETA: {eta_str}"
         )
 
+
+# ==========================================
+# --- LOOP 2: DEEP Q-NETWORK TRAINING ---
+# ==========================================
+logger.info("\n" + "=" * 60)
+logger.info("STARTING INDEPENDENT DQN TRAINING PHASE")
+logger.info("=" * 60)
+
+dqn_agent = DQNAgent(
+    state_dim=env.get_state_dim(),
+    n_actions=len(env.planes),
+    lr=0.0005,
+    gamma=0.95,
+    epsilon=1.0,
+    epsilon_decay=0.9999,
+    min_epsilon=0.05,
+    batch_size=64,
+    tau=0.005,
+)
+
+n_dqn_episodes = 50_000  # Neural networks generalize state vectors incredibly quickly
+dqn_log_interval = 200
+dqn_scores = []
+
+for i in range(1, n_dqn_episodes + 1):
+    raw_state = env.reset()
+    state = env.get_vector_state(raw_state)
+    done = False
+    episode_reward = 0
+
+    while not done:
+        action = dqn_agent.choose_action(state, use_epsilon=True)
+        next_raw_state, reward, done, _ = env.step(action)
+        next_state = env.get_vector_state(next_raw_state)
+
+        # Scale down reward to ensure stable weight gradients inside the network
+        scaled_reward = reward * 0.001
+        dqn_agent.store_transition(state, action, scaled_reward, next_state, done)
+        dqn_agent.learn()
+
+        state = next_state
+        episode_reward += reward
+
+    dqn_scores.append(episode_reward)
+    dqn_agent.decay_epsilon()
+
+    if i % dqn_log_interval == 0:
+        avg_score_dqn = np.mean(dqn_scores[-dqn_log_interval:])
+        pct_dqn = (i / n_dqn_episodes) * 100
+        logger.info(
+            f"[DQN Phase] Progress: {pct_dqn:>5.1f}% | Epsilon: {dqn_agent.epsilon:.4f} | Avg Profit: ${avg_score_dqn:>10.0f}"
+        )
+
+
 logger.info("Training complete. Moving to final schedule execution...")
 
 # --- FINAL COMPARISON EXECUTION ---
@@ -149,6 +210,7 @@ solvers = {
     "Random": RandomSolver(),
     "Greedy": ClosestPlaneGreedySolver(),
     "Q_Agent": QLearningSolver(agent),
+    "DQN_Agent": DQNSolver(dqn_agent),
 }
 
 # Define the Schedules to test

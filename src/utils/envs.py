@@ -1,5 +1,7 @@
 import random
 
+import numpy as np
+
 from src.log_config import get_logger
 
 logger = get_logger("plane_assignment")
@@ -11,6 +13,7 @@ class AirlineEnv:
         flights,
         plane_configs,
         dist_dict,
+        cities,
         fuel_price=3,
         penalty_per_min=5,
         use_clipping=True,
@@ -22,6 +25,11 @@ class AirlineEnv:
         self.fuel_price = fuel_price
         self.penalty_per_min = penalty_per_min
         self.use_clipping = use_clipping
+
+        # Build stable indexing for strings -> neural arrays
+        self.cities = sorted(list(set(cities + ["lodz"])))
+        self.city_to_idx = {city: i for i, city in enumerate(self.cities)}
+
         self.reset()
 
     def reset(self):
@@ -34,6 +42,59 @@ class AirlineEnv:
         """Swaps the flight list and resets the state."""
         self.flights = new_flights
         return self.reset()
+
+    def get_vector_state(self, raw_state=None):
+        """
+        Translates raw tuples into a standardized flat numerical vector
+        using One-Hot Encoding for positions.
+        """
+        if raw_state is None:
+            times, locs, f_idx = self.times, self.locs, self.current_f_idx
+        else:
+            times, locs, f_idx = raw_state
+
+        num_cities = len(self.cities)
+        state_elements = []
+
+        # 1. Plane free times (Normalized by 600 minutes)
+        for t in times:
+            state_elements.append(float(t) / 600.0)
+
+        # 2. Plane positions (One-hot array per plane)
+        for l_ in locs:
+            one_hot = [0.0] * num_cities
+            idx = self.city_to_idx.get(l_, 0)
+            one_hot[idx] = 1.0
+            state_elements.extend(one_hot)
+
+        # 3. Impending flight tracking metrics
+        if f_idx < len(self.flights):
+            f = self.flights[f_idx]
+            f_orig_idx = self.city_to_idx.get(f["origin"], 0)
+            f_dest_idx = self.city_to_idx.get(f["dest"], 0)
+            f_start = float(f["start"]) / 600.0
+            f_pass = float(f["pass"]) / 200.0
+        else:
+            f_orig_idx, f_dest_idx, f_start, f_pass = 0, 0, 0.0, 0.0
+
+        state_elements.extend([float(f_idx), f_start, f_pass])
+
+        # 4. Target path requirements (One-hot mapping for current route)
+        orig_one_hot = [0.0] * num_cities
+        orig_one_hot[f_orig_idx] = 1.0
+        state_elements.extend(orig_one_hot)
+
+        dest_one_hot = [0.0] * num_cities
+        dest_one_hot[f_dest_idx] = 1.0
+        state_elements.extend(dest_one_hot)
+
+        return np.array(state_elements, dtype=np.float32)
+
+    def get_state_dim(self):
+        """Dynamically tracks matrix shapes based on configuration parameters."""
+        n_planes = len(self.planes)
+        n_cities = len(self.cities)
+        return n_planes + (n_planes * n_cities) + 3 + (2 * n_cities)
 
     def simulate_step(self, action_idx):
         """
@@ -162,6 +223,18 @@ class QLearningSolver(BaseSolver):
     def choose_action(self, state, env):
         # We use the agent's logic but force epsilon=0 for evaluation
         return self.agent.choose_action(state, use_epsilon=False)
+
+
+class DQNSolver(BaseSolver):
+    """Added: Deep Q-Network implementation evaluation wrapper."""
+
+    def __init__(self, agent):
+        self.agent = agent
+
+    def choose_action(self, state, env):
+        # Fetch the vectorized array mapping during execution comparisons
+        vector_state = env.get_vector_state(state)
+        return self.agent.choose_action(vector_state, use_epsilon=False)
 
 
 def run_unified_execution(env, solver, flights, name="SOLVER"):
