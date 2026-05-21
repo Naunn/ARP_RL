@@ -26,6 +26,13 @@ class AirlineEnv:
         self.penalty_per_min = penalty_per_min
         self.use_clipping = use_clipping
 
+        # normalization
+        start_times = [f["start"] for f in self.flights]
+        self.operation_time = max(start_times) - min(start_times)
+
+        planes_seats = [config["seats"] for config in self.plane_configs.values()]
+        self.avg_pass = sum(planes_seats) / len(planes_seats)
+
         # Build stable indexing for strings -> neural arrays
         self.cities = sorted(list(set(cities + ["lodz"])))
         self.city_to_idx = {city: i for i, city in enumerate(self.cities)}
@@ -56,30 +63,30 @@ class AirlineEnv:
         num_cities = len(self.cities)
         state_elements = []
 
-        # 1. Plane free times (Normalized by 600 minutes)
+        # Normalize plane/es free time/es (by opeartional time)
         for t in times:
-            state_elements.append(float(t) / 600.0)
+            state_elements.append(float(t) / self.operation_time)
 
-        # 2. Plane positions (One-hot array per plane)
-        for l_ in locs:
+        # One-hot the plane positions (array per plane)
+        for loc in locs:
             one_hot = [0.0] * num_cities
-            idx = self.city_to_idx.get(l_, 0)
+            idx = self.city_to_idx.get(loc, 0)
             one_hot[idx] = 1.0
             state_elements.extend(one_hot)
 
-        # 3. Impending flight tracking metrics
+        # Normalize tracking metrics
         if f_idx < len(self.flights):
             f = self.flights[f_idx]
             f_orig_idx = self.city_to_idx.get(f["origin"], 0)
             f_dest_idx = self.city_to_idx.get(f["dest"], 0)
-            f_start = float(f["start"]) / 600.0
-            f_pass = float(f["pass"]) / 200.0
+            f_start = float(f["start"]) / self.operation_time
+            f_pass = float(f["pass"]) / self.avg_pass
         else:
             f_orig_idx, f_dest_idx, f_start, f_pass = 0, 0, 0.0, 0.0
 
         state_elements.extend([float(f_idx), f_start, f_pass])
 
-        # 4. Target path requirements (One-hot mapping for current route)
+        # One-hot mapping for current route
         orig_one_hot = [0.0] * num_cities
         orig_one_hot[f_orig_idx] = 1.0
         state_elements.extend(orig_one_hot)
@@ -95,6 +102,8 @@ class AirlineEnv:
         n_planes = len(self.planes)
         n_cities = len(self.cities)
         return n_planes + (n_planes * n_cities) + 3 + (2 * n_cities)
+        # 3 - because we have 3 state elements in a state ((self.times, self.locs, self.current_f_idx));
+        # 2 - because of the number of cities per connection (origin and destination);
 
     def simulate_step(self, action_idx):
         """

@@ -2,10 +2,8 @@ import time
 
 import numpy as np
 
-from src.agents.q_learning_agent import QAgent
-
 from src.agents.dqn_agent import DQNAgent
-
+from src.agents.q_learning_agent import QAgent
 from src.config import (
     CITIES,
     FIRST_FLIGHT_HOUR,
@@ -19,10 +17,10 @@ from src.utils.dist import create_dist_dict
 from src.utils.envs import (
     AirlineEnv,
     ClosestPlaneGreedySolver,
+    DQNSolver,
     QLearningSolver,
     RandomSolver,
     run_unified_execution,
-    DQNSolver,
 )
 from src.utils.fleet import generate_fleet
 from src.utils.schedule import (
@@ -108,7 +106,7 @@ env = AirlineEnv(FLIGHTS, PLANES, dist_dict, cities=CITIES, use_clipping=False)
 agent = QAgent(n_actions=len(env.planes), epsilon=0.2, use_decay=False)
 
 # --- TRAINING SETTINGS ---
-n_episodes = 500_000
+n_episodes = 250_000
 log_interval = 10_000
 scores = []
 start_wall_time = time.time()
@@ -156,21 +154,31 @@ logger.info("\n" + "=" * 60)
 logger.info("STARTING INDEPENDENT DQN TRAINING PHASE")
 logger.info("=" * 60)
 
+n_dqn_episodes = 25_000  # Neural networks generalize state vectors incredibly quickly
+dqn_log_interval = 200
+
+init_epsilon = 1.0
+min_epsilon_target = 0.1
+
+# calculate the precise decay multiplier to reach target epsilon at 2/3 training window
+computed_decay = (min_epsilon_target / init_epsilon) ** (
+    1.0 / int(n_dqn_episodes * (2 / 3))
+)
+
 dqn_agent = DQNAgent(
     state_dim=env.get_state_dim(),
     n_actions=len(env.planes),
-    lr=0.0005,
+    lr=0.0001,
     gamma=0.95,
-    epsilon=1.0,
-    epsilon_decay=0.9999,
-    min_epsilon=0.05,
+    epsilon=init_epsilon,
+    epsilon_decay=computed_decay,
+    min_epsilon=min_epsilon_target,
     batch_size=64,
     tau=0.005,
 )
 
-n_dqn_episodes = 50_000  # Neural networks generalize state vectors incredibly quickly
-dqn_log_interval = 200
 dqn_scores = []
+dqn_start_time = time.time()
 
 for i in range(1, n_dqn_episodes + 1):
     raw_state = env.reset()
@@ -197,8 +205,17 @@ for i in range(1, n_dqn_episodes + 1):
     if i % dqn_log_interval == 0:
         avg_score_dqn = np.mean(dqn_scores[-dqn_log_interval:])
         pct_dqn = (i / n_dqn_episodes) * 100
+
+        dqn_elapsed_time = time.time() - dqn_start_time
+        avg_time_per_dqn_ep = dqn_elapsed_time / i
+        dqn_remaining_sec = int((n_dqn_episodes - i) * avg_time_per_dqn_ep)
+        dqn_eta_str = time.strftime("%H:%M:%S", time.gmtime(dqn_remaining_sec))
+
         logger.info(
-            f"[DQN Phase] Progress: {pct_dqn:>5.1f}% | Epsilon: {dqn_agent.epsilon:.4f} | Avg Profit: ${avg_score_dqn:>10.0f}"
+            f"[DQN Phase] Progress: {pct_dqn:>5.1f}% | "
+            f"Epsilon: {dqn_agent.epsilon:.4f} | "
+            f"Avg Profit: ${avg_score_dqn:>10.0f} | "
+            f"ETA: {dqn_eta_str}"
         )
 
 
