@@ -68,6 +68,7 @@ class QAgent:
 
     def learn(self, state, action, reward, next_state, done):
         """
+
         Updates the Q-table using the Bellman equation.
         """
         s, s_next = self._bucket_state(state), self._bucket_state(next_state)

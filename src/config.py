@@ -1,5 +1,14 @@
-CITIES = ["praga", "milan"]  # , "lodz", "paris", "madryt", "berlin", "barcelona"]
-N_FLIGHTS = 5  # 0
+CITIES = [
+    "praga",
+    "milan",
+    # "lodz",
+    # "paris",
+    # "madryt",
+    # "berlin",
+    # "barcelona",
+]  # ["praga", "milan", "lodz", "paris", "madryt", "berlin", "barcelona"]
+N_FLIGHTS = 10
+N_EVAL_FLIGHTS = 10
 FIRST_FLIGHT_HOUR = 5
 LAST_FLIGHT_HOUR = 23
 MIN_PASS = 100

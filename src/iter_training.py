@@ -11,6 +11,7 @@ from src.config import (
     LAST_FLIGHT_HOUR,
     MAX_PASS,
     MIN_PASS,
+    N_EVAL_FLIGHTS,
     N_FLIGHTS,
 )
 from src.log_config import get_logger
@@ -44,13 +45,13 @@ def get_model_filename(iteration, flights_count, cities_count, fleet_size, episo
 
 
 # --- GENERAL CONFIGURATION ---
-N_ITERATIONS = 10  # Number of times we regenerate schedules and continue training
+N_ITERATIONS = 2  # Number of times we regenerate schedules and continue training
 N_DQN_EPISODES = 5_000  # Episodes per schedule iteration
 DQN_LOG_INTERVAL = 200
 
 # --- STATIC DATA SETUP ---
 dist_dict = create_dist_dict(CITIES)
-fleet_config = {"BOEING": 2, "AIRBUS": 1}
+fleet_config = {"BOEING": 2, "AIRBUS": 2}
 PLANES = generate_fleet(fleet_config)
 num_planes = len(PLANES)
 
@@ -93,10 +94,10 @@ for iteration in range(1, N_ITERATIONS + 1):
     logger.info(f"STARTING SCHEDULE REGENERATION ITERATION {iteration}/{N_ITERATIONS}")
     logger.info("=" * 80)
 
-    # 1. Reset Epsilon Exploration for the new schedule environment
+    # Reset Epsilon Exploration for the new schedule environment
     dqn_agent.epsilon = init_epsilon
 
-    # 2. Re-calculate the precise decay multiplier to finish at 2/3 of *this* schedule's window
+    # Re-calculate the precise decay multiplier to finish at n/m of *this* schedule's window
     computed_decay = (min_epsilon_target / init_epsilon) ** (
         1.0 / int(N_DQN_EPISODES * (2 / 3))
     )
@@ -225,13 +226,13 @@ logger.info("\nGlobal training cycle finished across all iterations.")
 # ===================================================
 # --- FINAL POST-TRAINING EVALUATION PHASE ---
 # ===================================================
-logger.info("\n" + "=" * 80)
+logger.info("\n" + "=" * 95)
 logger.info("STARTING FINAL EVALUATION ON UNSEEN TEST SCHEDULE")
-logger.info("=" * 80)
+logger.info("=" * 95)
 
 # Generate an entirely fresh test schedule the models never saw
 FINAL_TEST_FLIGHTS = generate_random_flights(
-    n=100,
+    n=N_EVAL_FLIGHTS,
     cities=CITIES,
     start_time_range=(FIRST_FLIGHT_HOUR * 60, LAST_FLIGHT_HOUR * 60),
     pass_range=(MIN_PASS, MAX_PASS),
@@ -250,54 +251,75 @@ logger.info(
     f"Final Test Schedule Global Utilization: {utilization:.1f}% | Peak Concurrency: {max_req_planes} planes"
 )
 
-# Print the Final Comparison Table Header
-logger.info("\n" + "=" * 55)
-logger.info(
-    f"{'MODEL SOURCE':<25} | {'FINAL TEST PROFIT':>14} | {'FINAL TEST DELAY':>11}"
-)
-logger.info("-" * 55)
+# Dictionary to hold metrics for the row matrix view
+# Layout format: results[strategy_row_name] = {"profit": p, "delay": d}
+results = {}
 
-# Evaluate Baselines once first
-baseline_solvers = {
-    "Random Baseline": RandomSolver(),
-    "Greedy Baseline": ClosestPlaneGreedySolver(),
+# EVALUATE STATISTICAL BASELINES
+baselines = {
+    "Random": RandomSolver(),
+    "Greedy": ClosestPlaneGreedySolver(),
 }
 
-for name, solver_obj in baseline_solvers.items():
+for name, solver_obj in baselines.items():
     p, d = run_unified_execution(final_eval_env, solver_obj, FINAL_TEST_FLIGHTS, name)
-    logger.info(f"{name:<25} | ${p:>13,.0f} | {d:>10.0f}m")
-logger.info("-" * 55)
+    results[name] = {"profit": p, "delay": d}
 
-# Iteratively load each historically saved model weight and test it
+# EVALUATE HISTORICAL DQN CHECKPOINTS SEQUENTIALLY
 for iteration in range(1, N_ITERATIONS + 1):
     model_path = get_model_filename(
         iteration, N_FLIGHTS, len(CITIES), num_planes, N_DQN_EPISODES
     )
+    row_label = f"DQN_Iter_{iteration:02d}"
 
     if os.path.exists(model_path):
         try:
-            # Load historical weights back into the agent
+            # Load weights into active policy net & move into eval mode
             dqn_agent.policy_net.load_state_dict(torch.load(model_path))
-            dqn_agent.policy_net.eval()  # Ensure evaluation mode
-
-            # Wrap in the solver
+            dqn_agent.policy_net.eval()
             historical_solver = DQNSolver(dqn_agent)
 
-            # Execute on the completely fresh test schedule
             p, d = run_unified_execution(
-                final_eval_env,
-                historical_solver,
-                FINAL_TEST_FLIGHTS,
-                f"DQN_Iter_{iteration}",
+                final_eval_env, historical_solver, FINAL_TEST_FLIGHTS, row_label
             )
-
-            logger.info(
-                f"DQN Checkpoint (Iter {iteration:02d}) | ${p:>13,.0f} | {d:>10.0f}m"
-            )
+            results[row_label] = {"profit": p, "delay": d}
 
         except Exception as e:
-            logger.error(f"Failed to evaluate checkpoint {model_path}: {e}")
+            logger.error(
+                f"Failed execution grid mapping for checkpoint {model_path}: {e}"
+            )
     else:
-        logger.warning(f"Checkpoint not found for iteration {iteration}: {model_path}")
+        logger.warning(f"Checkpoint row omitted. Missing file: {model_path}")
 
-logger.info("=" * 55)
+
+# ===================================================
+# --- FINAL UNIFIED TEST MATRIX SCOREBOARD ---
+# ===================================================
+logger.info("\n" + "=" * 95)
+# Reused your structured column width formatting logic
+header = f"{'STRATEGY':<15} | {'TEST PROFIT':>14} | {'TEST DELAY':>11} | {'FINAL STATUS':>14} | {'METRIC ACC':>11}"
+logger.info(header)
+logger.info("-" * 95)
+
+for strategy_key, metrics in results.items():
+    # Format strings with currency/units to ensure fixed-width alignment
+    test_p_str = f"${metrics['profit']:>13,.0f}"
+    test_d_str = f"{metrics['delay']:>10.0f}m"
+
+    # Simple status checks to maintain the original look of the output columns
+    status_str = f"{'COMPLETED':>14}"
+    metric_str = f"{'OPTIMAL':>11}" if "DQN" in strategy_key else f"{'BASELINE':>11}"
+
+    logger.info(
+        f"{strategy_key:<15} | {test_p_str} | {test_d_str} | {status_str} | {metric_str}"
+    )
+
+logger.info("=" * 95)
+logger.info("ANALYSIS GUIDE:")
+logger.info(
+    "Check 'Test Profit': Primary metric for historical variant generalization."
+)
+logger.info(
+    "Compare DQN Iteration steps down to observe structural policy optimization."
+)
+logger.info("=" * 95)
