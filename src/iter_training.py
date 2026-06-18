@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 import torch
 
@@ -120,7 +122,23 @@ for iteration in range(1, N_ITERATIONS + 1):
     TrainingLogger.log_feasibility(iteration, utilization, max_req_planes, num_planes)
 
     # Create environments for training and evaluation
-    train_env = AirlineEnv(
+    q_train_env = AirlineEnv(
+        FLIGHTS,
+        PLANES,
+        dist_dict,
+        cities=AIRPORTS,
+        penalty_per_min=PENALTY_PER_MIN,
+        use_clipping=TRAIN_USE_CLIPPING,
+    )
+    dqn_train_env = AirlineEnv(
+        FLIGHTS,
+        PLANES,
+        dist_dict,
+        cities=AIRPORTS,
+        penalty_per_min=PENALTY_PER_MIN,
+        use_clipping=TRAIN_USE_CLIPPING,
+    )
+    double_dqn_train_env = AirlineEnv(
         FLIGHTS,
         PLANES,
         dist_dict,
@@ -138,10 +156,10 @@ for iteration in range(1, N_ITERATIONS + 1):
     )
 
     # Train Q-learning and both DQN variants
-    q_scores = train_q_learning_iteration(q_agent, train_env, N_Q_EPISODES, iteration)
+    q_scores = train_q_learning_iteration(q_agent, q_train_env, N_Q_EPISODES, iteration)
     dqn_scores = train_dqn_iteration(
         dqn_agent,
-        train_env,
+        dqn_train_env,
         N_DQN_EPISODES,
         iteration,
         early_stopping=True,
@@ -150,7 +168,7 @@ for iteration in range(1, N_ITERATIONS + 1):
     )
     double_dqn_scores = train_dqn_iteration(
         double_dqn_agent,
-        train_env,
+        double_dqn_train_env,
         N_DOUBLE_DQN_EPISODES,
         iteration,
         early_stopping=True,
@@ -189,9 +207,9 @@ for iteration in range(1, N_ITERATIONS + 1):
     solvers = {
         "Random": RandomSolver(),
         "Greedy": ClosestPlaneGreedySolver(),
-        "Q_Learning": QLearningSolver(q_agent),
-        "DQN_Agent": DQNSolver(dqn_agent),
-        "Double_DQN": DQNSolver(double_dqn_agent),
+        "Q_Learning": QLearningSolver(copy.deepcopy(q_agent)),
+        "DQN_Agent": DQNSolver(copy.deepcopy(dqn_agent)),
+        "Double_DQN": DQNSolver(copy.deepcopy(double_dqn_agent)),
     }
     schedules_eval = {"TRAINING_DATA": FLIGHTS, "DISRUPTION_TEST": FLIGHTS_TEST}
 

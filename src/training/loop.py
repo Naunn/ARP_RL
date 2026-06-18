@@ -8,7 +8,12 @@ import time
 import numpy as np
 import torch
 
-from src.config import DQN_LOG_INTERVAL, EARLY_STOPPING_CONFIG, Q_LOG_INTERVAL
+from src.config import (
+    DQN_LOG_INTERVAL,
+    DQN_REWARD_SCALE,
+    EARLY_STOPPING_CONFIG,
+    Q_LOG_INTERVAL,
+)
 from src.log_config import get_logger
 
 logger = get_logger("plane_assignment")
@@ -160,7 +165,7 @@ def train_dqn_episode(agent, env):
         next_raw_state, reward, done, _ = env.step(action)
         next_state_tuple = env.get_vector_state(next_raw_state)
 
-        scaled_reward = reward * 0.001
+        scaled_reward = reward * DQN_REWARD_SCALE
 
         # Unpack tuple elements for storage
         fleet_state, flight_matrix = state_tuple

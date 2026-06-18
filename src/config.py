@@ -83,7 +83,12 @@ MODEL_HYPERPARAMS = {
 MODEL_TRAINING_PARAMS = {
     "DQN": {"n_episodes": 10_000, "log_interval": 200},
     "DOUBLE_DQN": {"n_episodes": 10_000, "log_interval": 200},
-    "Q_LEARNING": {"n_episodes": 2_500_000, "log_interval": 2_000},
+    "Q_LEARNING": {"n_episodes": 1_000_000, "log_interval": 2_000},
+}
+
+# Training stability controls for value-based agents.
+RL_TRAINING_CONFIG = {
+    "dqn_reward_scale": 0.001,
 }
 
 # Reward-shaping controls. Keeping clipping enabled prevents delay penalties from
@@ -107,6 +112,9 @@ N_Q_EPISODES = MODEL_TRAINING_PARAMS["Q_LEARNING"]["n_episodes"]
 DQN_LOG_INTERVAL = MODEL_TRAINING_PARAMS["DQN"]["log_interval"]
 DOUBLE_DQN_LOG_INTERVAL = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["log_interval"]
 Q_LOG_INTERVAL = MODEL_TRAINING_PARAMS["Q_LEARNING"]["log_interval"]
+
+# Legacy RL tuning aliases
+DQN_REWARD_SCALE = RL_TRAINING_CONFIG["dqn_reward_scale"]
 
 # Legacy reward aliases
 TRAIN_USE_CLIPPING = REWARD_CONFIG["train_use_clipping"]

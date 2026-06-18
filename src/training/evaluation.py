@@ -3,6 +3,7 @@ Evaluation utilities for testing trained agents against various solvers.
 Handles both iteration-specific evaluation and final cross-validation testing.
 """
 
+import copy
 import os
 
 import torch
@@ -116,7 +117,9 @@ def evaluate_iteration(eval_env, solvers, schedules_eval, iteration):
 
     for sched_name, flight_list in schedules_eval.items():
         for solver_name, solver_obj in solvers.items():
-            p, d = run_unified_execution(eval_env, solver_obj, flight_list, solver_name)
+            p, d = run_unified_execution(
+                copy.deepcopy(eval_env), solver_obj, flight_list, solver_name
+            )
             scoreboard.add_result(sched_name, solver_name, p, d)
 
     scoreboard.log_iteration_scoreboard(iteration)
@@ -160,7 +163,7 @@ def evaluate_final_test(
 
     for name, solver_obj in baselines.items():
         p, d = run_unified_execution(
-            final_eval_env, solver_obj, final_test_flights, name
+            copy.deepcopy(final_eval_env), solver_obj, final_test_flights, name
         )
         scoreboard.add_result("FINAL_TEST", name, p, d)
 
@@ -168,7 +171,10 @@ def evaluate_final_test(
     if extra_solvers is not None:
         for solver_name, solver_obj in extra_solvers.items():
             p, d = run_unified_execution(
-                final_eval_env, solver_obj, final_test_flights, solver_name
+                copy.deepcopy(final_eval_env),
+                solver_obj,
+                final_test_flights,
+                solver_name,
             )
             scoreboard.add_result("FINAL_TEST", solver_name, p, d)
 
@@ -178,13 +184,16 @@ def evaluate_final_test(
 
         if os.path.exists(model_path):
             try:
-                # Load weights into active policy net & move into evaluation mode
-                dqn_agent.policy_net.load_state_dict(torch.load(model_path))
-                dqn_agent.policy_net.eval()
-                historical_solver = DQNSolver(dqn_agent)
+                eval_agent = copy.deepcopy(dqn_agent)
+                eval_agent.policy_net.load_state_dict(torch.load(model_path))
+                eval_agent.policy_net.eval()
+                historical_solver = DQNSolver(eval_agent)
 
                 p, d = run_unified_execution(
-                    final_eval_env, historical_solver, final_test_flights, row_label
+                    copy.deepcopy(final_eval_env),
+                    historical_solver,
+                    final_test_flights,
+                    row_label,
                 )
                 scoreboard.add_result("FINAL_TEST", row_label, p, d)
 
@@ -200,11 +209,15 @@ def evaluate_final_test(
 
             if os.path.exists(model_path):
                 try:
-                    q_agent.q_table = torch.load(model_path)
-                    historical_solver = QLearningSolver(q_agent)
+                    eval_agent = copy.deepcopy(q_agent)
+                    eval_agent.q_table = torch.load(model_path)
+                    historical_solver = QLearningSolver(eval_agent)
 
                     p, d = run_unified_execution(
-                        final_eval_env, historical_solver, final_test_flights, row_label
+                        copy.deepcopy(final_eval_env),
+                        historical_solver,
+                        final_test_flights,
+                        row_label,
                     )
                     scoreboard.add_result("FINAL_TEST", row_label, p, d)
 
@@ -220,12 +233,16 @@ def evaluate_final_test(
 
             if os.path.exists(model_path):
                 try:
-                    double_dqn_agent.policy_net.load_state_dict(torch.load(model_path))
-                    double_dqn_agent.policy_net.eval()
-                    historical_solver = DQNSolver(double_dqn_agent)
+                    eval_agent = copy.deepcopy(double_dqn_agent)
+                    eval_agent.policy_net.load_state_dict(torch.load(model_path))
+                    eval_agent.policy_net.eval()
+                    historical_solver = DQNSolver(eval_agent)
 
                     p, d = run_unified_execution(
-                        final_eval_env, historical_solver, final_test_flights, row_label
+                        copy.deepcopy(final_eval_env),
+                        historical_solver,
+                        final_test_flights,
+                        row_label,
                     )
                     scoreboard.add_result("FINAL_TEST", row_label, p, d)
 

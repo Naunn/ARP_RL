@@ -1,3 +1,4 @@
+import copy
 import time
 
 import numpy as np
@@ -6,6 +7,7 @@ from src.agents.dqn_agent import DQNAgent
 from src.agents.q_learning_agent import QAgent
 from src.config import (
     CITIES,
+    DQN_REWARD_SCALE,
     FIRST_FLIGHT_HOUR,
     LAST_FLIGHT_HOUR,
     MAX_PASS,
@@ -192,7 +194,7 @@ for i in range(1, n_dqn_episodes + 1):
         next_state = env.get_vector_state(next_raw_state)
 
         # Scale down reward to ensure stable weight gradients inside the network
-        scaled_reward = reward * 0.001
+        scaled_reward = reward * DQN_REWARD_SCALE
         dqn_agent.store_transition(state, action, scaled_reward, next_state, done)
         dqn_agent.learn()
 
@@ -226,8 +228,8 @@ logger.info("Training complete. Moving to final schedule execution...")
 solvers = {
     "Random": RandomSolver(),
     "Greedy": ClosestPlaneGreedySolver(),
-    "Q_Agent": QLearningSolver(agent),
-    "DQN_Agent": DQNSolver(dqn_agent),
+    "Q_Agent": QLearningSolver(copy.deepcopy(agent)),
+    "DQN_Agent": DQNSolver(copy.deepcopy(dqn_agent)),
 }
 
 # Define the Schedules to test
@@ -239,7 +241,9 @@ for sched_name, flight_list in schedules.items():
     results[sched_name] = {}
     for solver_name, solver_obj in solvers.items():
         # Capturing both values from the tuple return
-        p, d = run_unified_execution(env, solver_obj, flight_list, solver_name)
+        p, d = run_unified_execution(
+            copy.deepcopy(env), solver_obj, flight_list, solver_name
+        )
         # Wrapping them in a dictionary for the scoreboard to read
         results[sched_name][solver_name] = {"profit": p, "delay": d}
 

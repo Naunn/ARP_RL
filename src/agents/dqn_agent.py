@@ -1,5 +1,4 @@
 import random
-from collections import deque
 
 import numpy as np
 import torch
@@ -50,20 +49,53 @@ class AttentionPoolingQNetwork(nn.Module):
 
 
 class ReplayBuffer:
-    """Storage unit for Experience Replay to break temporal correlations."""
+    """Prioritized experience replay buffer."""
 
-    def __init__(self, capacity=20000):
-        self.buffer = deque(maxlen=capacity)
+    def __init__(self, capacity=20000, alpha=0.6, beta=0.4, beta_increment=1e-4):
+        self.capacity = capacity
+        self.alpha = alpha
+        self.beta = beta
+        self.beta_increment = beta_increment
+        self.buffer = []
+        self.priorities = np.zeros(capacity, dtype=np.float32)
+        self.position = 0
 
     def push(
         self, fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done
     ):
-        self.buffer.append(
-            (fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done)
+        transition = (
+            fleet_state,
+            flight_matrix,
+            action,
+            reward,
+            next_fleet,
+            next_flights,
+            done,
         )
 
+        max_priority = self.priorities.max() if self.buffer else 1.0
+
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(transition)
+        else:
+            self.buffer[self.position] = transition
+
+        self.priorities[self.position] = max_priority
+        self.position = (self.position + 1) % self.capacity
+
     def sample(self, batch_size):
-        samples = random.sample(self.buffer, batch_size)
+        priorities = self.priorities[: len(self.buffer)]
+        scaled_priorities = priorities**self.alpha
+        sampling_probabilities = scaled_priorities / scaled_priorities.sum()
+
+        indices = np.random.choice(
+            len(self.buffer), batch_size, p=sampling_probabilities
+        )
+        samples = [self.buffer[idx] for idx in indices]
+
+        weights = (len(self.buffer) * sampling_probabilities[indices]) ** (-self.beta)
+        weights /= weights.max()
+        self.beta = min(1.0, self.beta + self.beta_increment)
 
         # Unpack elements independently to build structural numpy arrays cleanly
         fleet_b = np.array([s[0] for s in samples], dtype=np.float32)
@@ -75,6 +107,8 @@ class ReplayBuffer:
         done_b = np.array([s[6] for s in samples], dtype=np.float32)
 
         return (
+            indices,
+            weights.astype(np.float32),
             fleet_b,
             flights_b,
             action_b,
@@ -86,6 +120,10 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.buffer)
+
+    def update_priorities(self, indices, priorities):
+        for idx, priority in zip(indices, priorities):
+            self.priorities[idx] = max(float(priority), 1e-6)
 
 
 class DQNAgent:
@@ -126,6 +164,7 @@ class DQNAgent:
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+        self.loss_fn = nn.SmoothL1Loss(reduction="none")
         self.memory = ReplayBuffer(capacity=20000)
 
     def choose_action(self, state_tuple, use_epsilon=True):
@@ -164,15 +203,32 @@ class DQNAgent:
                     self.tau * policy_param.data + (1.0 - self.tau) * target_param.data
                 )
 
+    def _sample_training_batch(self):
+        return self.memory.sample(self.batch_size)
+
+    def _compute_weighted_td_loss(self, current_q, target_q, weights_t):
+        td_errors = current_q - target_q
+        per_sample_loss = self.loss_fn(current_q, target_q)
+        loss = (weights_t * per_sample_loss).mean()
+        return loss, td_errors
+
     def learn(self):
         """Samples a multi-component batch and performs one step of gradient descent."""
         if len(self.memory) < self.batch_size:
             return
 
         # Sample data arrays from experience buffer
-        fleet_b, flights_b, actions, rewards, next_fleet_b, next_flights_b, dones = (
-            self.memory.sample(self.batch_size)
-        )
+        (
+            indices,
+            weights,
+            fleet_b,
+            flights_b,
+            actions,
+            rewards,
+            next_fleet_b,
+            next_flights_b,
+            dones,
+        ) = self._sample_training_batch()
 
         # Convert layout blocks into PyTorch Tensors
         fleet_t = torch.FloatTensor(fleet_b).to(self.device)
@@ -182,6 +238,7 @@ class DQNAgent:
         next_fleet_t = torch.FloatTensor(next_fleet_b).to(self.device)
         next_flights_t = torch.FloatTensor(next_flights_b).to(self.device)
         dones_t = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
+        weights_t = torch.FloatTensor(weights).unsqueeze(1).to(self.device)
 
         # Get predicted Q-values for the actions taken
         current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
@@ -193,14 +250,18 @@ class DQNAgent:
             )[0]
             target_q = rewards_t + (1 - dones_t) * self.gamma * max_next_q
 
-        # Compute Mean Squared Error Loss
-        loss = nn.MSELoss()(current_q, target_q)
+        loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
 
         # Optimize the Policy Network
         self.optimizer.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
         self.optimizer.step()
+
+        self.memory.update_priorities(
+            indices,
+            np.atleast_1d(np.abs(td_errors.detach().cpu().numpy()).squeeze()) + 1e-6,
+        )
 
         # Execute soft target updating
         self._polyak_update()
@@ -214,9 +275,17 @@ class DoubleDQNAgent(DQNAgent):
         if len(self.memory) < self.batch_size:
             return
 
-        fleet_b, flights_b, actions, rewards, next_fleet_b, next_flights_b, dones = (
-            self.memory.sample(self.batch_size)
-        )
+        (
+            indices,
+            weights,
+            fleet_b,
+            flights_b,
+            actions,
+            rewards,
+            next_fleet_b,
+            next_flights_b,
+            dones,
+        ) = self._sample_training_batch()
 
         fleet_t = torch.FloatTensor(fleet_b).to(self.device)
         flights_t = torch.FloatTensor(flights_b).to(self.device)
@@ -225,6 +294,7 @@ class DoubleDQNAgent(DQNAgent):
         next_fleet_t = torch.FloatTensor(next_fleet_b).to(self.device)
         next_flights_t = torch.FloatTensor(next_flights_b).to(self.device)
         dones_t = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
+        weights_t = torch.FloatTensor(weights).unsqueeze(1).to(self.device)
 
         current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
 
@@ -236,11 +306,16 @@ class DoubleDQNAgent(DQNAgent):
             )
             target_q = rewards_t + (1 - dones_t) * self.gamma * next_target_q
 
-        loss = nn.MSELoss()(current_q, target_q)
+        loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
 
         self.optimizer.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
         self.optimizer.step()
+
+        self.memory.update_priorities(
+            indices,
+            np.atleast_1d(np.abs(td_errors.detach().cpu().numpy()).squeeze()) + 1e-6,
+        )
 
         self._polyak_update()
