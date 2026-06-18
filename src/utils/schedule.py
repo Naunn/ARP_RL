@@ -40,6 +40,46 @@ def generate_random_flights(n, cities, start_time_range, pass_range):
     return generated_flights
 
 
+def generate_trap_schedule(n, cities, start_time_range, pass_range):
+    # Generate base random flight pool
+    flights = []
+    for i in range(n):
+        orig, dest = random.sample(cities, 2)
+        flights.append(
+            {
+                "id": 101 + i,
+                "origin": orig,
+                "dest": dest,
+                "start": random.randint(*start_time_range),
+                "pass": random.randint(*pass_range),
+            }
+        )
+
+    # Dynamic Trap Injection (No hardcoded array indices)
+    # Group flights into Early (Yield Trap) and Late (Concurrency Trap) windows
+    t_min, t_max = start_time_range
+    bottleneck_time = int(t_max * 0.90)
+
+    for i, f in enumerate(flights):
+        # Force the first ~20% of flights into a high-capacity hub-to-hub trap
+        if i < max(2, int(n * 0.2)):
+            f["origin"], f["dest"] = cities[0], cities[1]
+            f["start"] = random.randint(t_min + 30, t_min + 200)
+            f["pass"] = int(pass_range[1] * 0.95)
+
+        # Force the last ~40% of flights to cluster simultaneously at the end
+        elif i >= n - max(3, int(n * 0.4)):
+            f["origin"], f["dest"] = random.sample(cities[:3], 2)
+            f["start"] = random.randint(bottleneck_time - 15, bottleneck_time + 10)
+
+    # Final structural maintenance
+    flights.sort(key=lambda x: x["start"])
+    for idx, f in enumerate(flights):
+        f["id"] = 101 + idx
+
+    return flights
+
+
 def check_global_feasibility(flights, planes, plane_configs, dist_dict):
     """
     Analyzes schedule density and fleet capacity.
