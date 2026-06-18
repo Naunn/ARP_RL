@@ -8,7 +8,7 @@ import time
 import numpy as np
 import torch
 
-from src.config import DQN_LOG_INTERVAL, EARLY_STOPPING_CONFIG
+from src.config import DQN_LOG_INTERVAL, EARLY_STOPPING_CONFIG, Q_LOG_INTERVAL
 from src.log_config import get_logger
 
 logger = get_logger("plane_assignment")
@@ -48,10 +48,12 @@ class TrainingLogger:
             logger.info("Status: ENVIRONMENT IS SOLVABLE.")
 
     @staticmethod
-    def log_progress(iteration, progress_pct, epsilon, avg_score, eta_str):
-        """Log periodic training progress."""
+    def log_progress(
+        iteration, progress_pct, epsilon, avg_score, eta_str, model_name="MODEL"
+    ):
+        """Log periodic training progress with model context."""
         logger.info(
-            f"[Iter {iteration}] Progress: {progress_pct:>5.1f}% | "
+            f"[{model_name}] [Iter {iteration}] Progress: {progress_pct:>5.1f}% | "
             f"Epsilon: {epsilon:.4f} | "
             f"Avg Profit: ${avg_score:>10.0f} | "
             f"ETA: {eta_str}"
@@ -182,7 +184,71 @@ def train_dqn_episode(agent, env):
     return episode_reward
 
 
-def train_dqn_iteration(agent, train_env, n_episodes, iteration, early_stopping=True):
+def train_q_learning_iteration(
+    agent, train_env, n_episodes, iteration, log_interval=None
+):
+    """Train a Q-learning agent over episodes.
+
+    Args:
+        agent: QAgent instance
+        train_env: AirlineEnv instance
+        n_episodes: Number of episodes to train
+        iteration: Current iteration number for logging
+        log_interval: Optional custom log interval for Q-learning progress
+
+    Returns:
+        list: Scores from all episodes
+    """
+    q_scores = []
+    q_start_time = time.time()
+
+    if log_interval is None:
+        log_interval = max(Q_LOG_INTERVAL * 10, n_episodes // 10)
+        log_interval = min(log_interval, n_episodes)
+
+    for i in range(1, n_episodes + 1):
+        state = train_env.reset()
+        done = False
+        episode_reward = 0
+
+        while not done:
+            action = agent.choose_action(state, use_epsilon=True)
+            next_state, reward, done, _ = train_env.step(action)
+            agent.learn(state, action, reward, next_state, done)
+            state = next_state
+            episode_reward += reward
+
+        q_scores.append(episode_reward)
+        agent.decay_epsilon()
+
+        if i % log_interval == 0 or i == n_episodes:
+            avg_score = np.mean(q_scores[-log_interval:])
+            pct_complete = (i / n_episodes) * 100
+            elapsed = time.time() - q_start_time
+            avg_time_per_ep = elapsed / i
+            remaining_sec = int((n_episodes - i) * avg_time_per_ep)
+            eta_str = time.strftime("%H:%M:%S", time.gmtime(remaining_sec))
+            TrainingLogger.log_progress(
+                iteration,
+                pct_complete,
+                agent.epsilon,
+                avg_score,
+                eta_str,
+                model_name="Q_Learning",
+            )
+
+    return q_scores
+
+
+def train_dqn_iteration(
+    agent,
+    train_env,
+    n_episodes,
+    iteration,
+    early_stopping=True,
+    log_interval=None,
+    model_name=None,
+):
     """Run one full training iteration on the environment.
 
     Args:
@@ -191,12 +257,17 @@ def train_dqn_iteration(agent, train_env, n_episodes, iteration, early_stopping=
         n_episodes: Number of episodes to train
         iteration: Current iteration number (for logging)
         early_stopping: Whether to apply early stopping
+        log_interval: Optional logging interval for DQN-style agents
+        model_name: Optional name used in log output
 
     Returns:
         list: Scores from all episodes
     """
     dqn_scores = []
     dqn_start_time = time.time()
+
+    if log_interval is None:
+        log_interval = DQN_LOG_INTERVAL
 
     early_stop_manager = EarlyStoppingManager() if early_stopping else None
 
@@ -206,6 +277,7 @@ def train_dqn_iteration(agent, train_env, n_episodes, iteration, early_stopping=
 
         # Check early stopping
         if early_stopping:
+            assert early_stop_manager is not None
             should_stop, should_save = early_stop_manager.update(
                 dqn_scores, agent.epsilon
             )
@@ -225,8 +297,8 @@ def train_dqn_iteration(agent, train_env, n_episodes, iteration, early_stopping=
                 break
 
         # Periodic logging
-        if i % DQN_LOG_INTERVAL == 0:
-            avg_score_dqn = np.mean(dqn_scores[-DQN_LOG_INTERVAL:])
+        if i % log_interval == 0 or i == n_episodes:
+            avg_score_dqn = np.mean(dqn_scores[-log_interval:])
             pct_dqn = (i / n_episodes) * 100
 
             dqn_elapsed_time = time.time() - dqn_start_time
@@ -235,7 +307,12 @@ def train_dqn_iteration(agent, train_env, n_episodes, iteration, early_stopping=
             dqn_eta_str = time.strftime("%H:%M:%S", time.gmtime(dqn_remaining_sec))
 
             TrainingLogger.log_progress(
-                iteration, pct_dqn, agent.epsilon, avg_score_dqn, dqn_eta_str
+                iteration,
+                pct_dqn,
+                agent.epsilon,
+                avg_score_dqn,
+                dqn_eta_str,
+                model_name=model_name or agent.__class__.__name__,
             )
 
     return dqn_scores

@@ -8,6 +8,7 @@ import os
 import torch
 
 from src.agents.dqn_agent import DQNAgent
+from src.agents.q_learning_agent import QAgent
 from src.config import (
     AIRPORTS,
     CHECKPOINT_DIR,
@@ -20,6 +21,7 @@ from src.config import (
     MIN_EPSILON_TARGET,
     MIN_PASS,
     N_FLIGHTS,
+    Q_LEARNING_PARAMS,
 )
 from src.utils.dist import create_dist_dict
 from src.utils.envs import AirlineEnv
@@ -32,11 +34,19 @@ def setup_checkpoint_dir():
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 
-def get_model_filename(iteration, flights_count, cities_count, fleet_size, episodes):
+def get_model_filename(
+    iteration,
+    flights_count,
+    cities_count,
+    fleet_size,
+    episodes,
+    model_tag="DQN",
+):
     """Generates a standardized, easily sortable filename for historical tracking."""
+    normalized_tag = model_tag.upper().replace(" ", "_")
     return os.path.join(
         CHECKPOINT_DIR,
-        f"dqn_airline_episodes{episodes}_flights{flights_count}_cities{cities_count}_fleet{fleet_size}_iter{iteration:03d}.pth",
+        f"{normalized_tag}_airline_episodes{episodes}_flights{flights_count}_cities{cities_count}_fleet{fleet_size}_iter{iteration:03d}.pth",
     )
 
 
@@ -76,31 +86,42 @@ def initialize_dummy_environment(dist_dict, PLANES):
     return dummy_env
 
 
-def initialize_dqn_agent(dummy_env):
-    """Initialize DQN agent with hyperparameters from config.
+def initialize_dqn_agent(dummy_env, agent_cls=DQNAgent, hyperparams=None):
+    """Initialize a DQN-style agent with hyperparameters from config.
 
     Args:
         dummy_env: Environment to extract state dimensions from
+        agent_cls: Agent class to instantiate (DQNAgent or DoubleDQNAgent)
+        hyperparams: Optional hyperparameter mapping to override defaults
 
     Returns:
         DQNAgent: Initialized agent ready for training
     """
-    # Resolve state widths dynamically from the environment
+    if hyperparams is None:
+        hyperparams = DQN_HYPERPARAMS
+
     fleet_dim, flight_feature_dim = dummy_env.get_state_dim()
 
-    dqn_agent = DQNAgent(
+    agent = agent_cls(
         fleet_dim=fleet_dim,
         flight_feature_dim=flight_feature_dim,
         n_actions=len(dummy_env.planes),
-        lr=DQN_HYPERPARAMS["lr"],
-        gamma=DQN_HYPERPARAMS["gamma"],
-        epsilon=INIT_EPSILON,
-        epsilon_decay=DQN_HYPERPARAMS["epsilon_decay"],
-        min_epsilon=MIN_EPSILON_TARGET,
-        batch_size=DQN_HYPERPARAMS["batch_size"],
-        tau=DQN_HYPERPARAMS["tau"],
+        lr=hyperparams["lr"],
+        gamma=hyperparams["gamma"],
+        epsilon=hyperparams.get("init_epsilon", INIT_EPSILON),
+        epsilon_decay=hyperparams["epsilon_decay"],
+        min_epsilon=hyperparams.get("min_epsilon", MIN_EPSILON_TARGET),
+        batch_size=hyperparams["batch_size"],
+        tau=hyperparams["tau"],
     )
-    return dqn_agent
+    return agent
+
+
+def initialize_q_agent(n_actions, hyperparams=None):
+    """Initialize Q-learning agent with hyperparameters from config."""
+    if hyperparams is None:
+        hyperparams = Q_LEARNING_PARAMS
+    return QAgent(n_actions=n_actions, **hyperparams)
 
 
 def load_model_checkpoint(dqn_agent, model_path):
@@ -122,7 +143,7 @@ def load_model_checkpoint(dqn_agent, model_path):
 
 
 def reset_agent_exploration(dqn_agent, n_episodes):
-    """Reset agent exploration parameters for a new training iteration.
+    """Reset DQN exploration parameters for a new training iteration.
 
     Args:
         dqn_agent: DQNAgent instance
@@ -135,3 +156,11 @@ def reset_agent_exploration(dqn_agent, n_episodes):
         1.0 / int(n_episodes * (2 / 3))
     )
     dqn_agent.epsilon_decay = computed_decay
+
+
+def reset_q_agent_exploration(q_agent):
+    """Reset Q-learning exploration parameters for a new training iteration."""
+    q_agent.epsilon = max(q_agent.epsilon, Q_LEARNING_PARAMS["epsilon"])
+    q_agent.epsilon_decay = Q_LEARNING_PARAMS["epsilon_decay"]
+    q_agent.min_epsilon = Q_LEARNING_PARAMS["min_epsilon"]
+    q_agent.use_decay = Q_LEARNING_PARAMS.get("use_decay", True)

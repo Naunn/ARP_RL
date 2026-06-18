@@ -279,9 +279,19 @@ class DQNSolver(BaseSolver):
         Accepts the execution parameters natively from the test runner.
         Passes the state tuple straight to the agent without splitting it.
         """
-        # state is already the tuple package: (fleet_state, flight_matrix)
-        # Force use_epsilon=False to ensure clean evaluation scores
         return self.agent.choose_action(state, use_epsilon=False)
+
+
+class QLearningSolver(BaseSolver):
+    """Q-Learning evaluation wrapper for raw environment states."""
+
+    def __init__(self, agent):
+        self.agent = agent
+
+    def choose_action(self, state, env: AirlineEnv):
+        """Use the raw environment state for the Q-learning agent."""
+        raw_state = (env.times, env.locs, env.current_f_idx)
+        return self.agent.choose_action(raw_state, use_epsilon=False)
 
 
 def run_unified_execution(env, solver, flights, name="SOLVER"):
@@ -328,6 +338,7 @@ def run_unified_execution(env, solver, flights, name="SOLVER"):
             f"{orig_disp:<8} | {f['dest']:<6} | {f['start']:>5.0f} | {act_start_disp:>6} | "
             f"{info['arrival_at_dest']:>6.0f} | ${reward:>10,.0f}"
         )
+        # Advance evaluation state so the next decision uses the updated environment.
         state = next_state
 
     logger.info("-" * line_width)

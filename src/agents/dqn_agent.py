@@ -204,3 +204,43 @@ class DQNAgent:
 
         # Execute soft target updating
         self._polyak_update()
+
+
+class DoubleDQNAgent(DQNAgent):
+    """Double DQN agent using policy network for action selection and target network for value evaluation."""
+
+    def learn(self):
+        """Performs a DDQN update step using the policy network for argmax selection."""
+        if len(self.memory) < self.batch_size:
+            return
+
+        fleet_b, flights_b, actions, rewards, next_fleet_b, next_flights_b, dones = (
+            self.memory.sample(self.batch_size)
+        )
+
+        fleet_t = torch.FloatTensor(fleet_b).to(self.device)
+        flights_t = torch.FloatTensor(flights_b).to(self.device)
+        actions_t = torch.LongTensor(actions).unsqueeze(1).to(self.device)
+        rewards_t = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
+        next_fleet_t = torch.FloatTensor(next_fleet_b).to(self.device)
+        next_flights_t = torch.FloatTensor(next_flights_b).to(self.device)
+        dones_t = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
+
+        current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
+
+        with torch.no_grad():
+            next_policy_q = self.policy_net(next_fleet_t, next_flights_t)
+            next_actions = next_policy_q.argmax(dim=1, keepdim=True)
+            next_target_q = self.target_net(next_fleet_t, next_flights_t).gather(
+                1, next_actions
+            )
+            target_q = rewards_t + (1 - dones_t) * self.gamma * next_target_q
+
+        loss = nn.MSELoss()(current_q, target_q)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
+        self.optimizer.step()
+
+        self._polyak_update()

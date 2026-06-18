@@ -14,7 +14,7 @@ CITIES = [
 AIRPORTS = [
     # "praga",
     # "milan",
-    # "lodz",
+    "lodz",
     # "paris",
     # "madryt",
     "berlin",
@@ -23,7 +23,7 @@ AIRPORTS = [
     # "qatar",
     "dubai",
 ]
-N_FLIGHTS = 20
+N_FLIGHTS = 10
 N_EVAL_FLIGHTS = N_FLIGHTS * 5
 FIRST_FLIGHT_HOUR = 5
 LAST_FLIGHT_HOUR = 23
@@ -48,24 +48,75 @@ PLANES_TEMPLATES = {
 }
 
 # --- TRAINING / EXPERIMENT CONFIG ---
-# Iteration control and DQN training hyperparameters
+# Iteration control and model-specific training hyperparameters
 N_ITERATIONS = 1
 
-# DQN training parameters
-N_DQN_EPISODES = 25_000
-DQN_LOG_INTERVAL = 200
-
-# Agent hyperparameters
-INIT_EPSILON = 0.5
-MIN_EPSILON_TARGET = 0.1
-
-DQN_HYPERPARAMS = {
-    "lr": 0.0001,
-    "gamma": 0.95,
-    "epsilon_decay": 0.999,
-    "batch_size": 64,
-    "tau": 0.005,
+MODEL_HYPERPARAMS = {
+    "DQN": {
+        "lr": 0.0001,
+        "gamma": 0.95,
+        "epsilon_decay": 0.999,
+        "init_epsilon": 0.5,
+        "min_epsilon": 0.1,
+        "batch_size": 64,
+        "tau": 0.005,
+    },
+    "DOUBLE_DQN": {
+        "lr": 0.000075,
+        "gamma": 0.95,
+        "epsilon_decay": 0.999,
+        "init_epsilon": 0.5,
+        "min_epsilon": 0.1,
+        "batch_size": 64,
+        "tau": 0.005,
+    },
+    "Q_LEARNING": {
+        "lr": 0.1,
+        "gamma": 0.9,
+        "epsilon": 1.0,
+        "epsilon_decay": 0.999995,
+        "min_epsilon": 0.01,
+        "use_decay": True,
+    },
 }
+
+MODEL_TRAINING_PARAMS = {
+    "DQN": {"n_episodes": 10_000, "log_interval": 200},
+    "DOUBLE_DQN": {"n_episodes": 10_000, "log_interval": 200},
+    "Q_LEARNING": {"n_episodes": 2_500_000, "log_interval": 2_000},
+}
+
+# Reward-shaping controls. Keeping clipping enabled prevents delay penalties from
+# dominating training and evaluation when schedules become highly congested.
+REWARD_CONFIG = {
+    "train_use_clipping": True,
+    "eval_use_clipping": True,
+    "final_eval_use_clipping": True,
+    "penalty_per_min": 5,
+}
+
+# Legacy aliases for compatibility with existing training code
+DQN_HYPERPARAMS = MODEL_HYPERPARAMS["DQN"]
+DOUBLE_DQN_HYPERPARAMS = MODEL_HYPERPARAMS["DOUBLE_DQN"]
+Q_LEARNING_PARAMS = MODEL_HYPERPARAMS["Q_LEARNING"]
+
+# Legacy training parameter aliases
+N_DQN_EPISODES = MODEL_TRAINING_PARAMS["DQN"]["n_episodes"]
+N_DOUBLE_DQN_EPISODES = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["n_episodes"]
+N_Q_EPISODES = MODEL_TRAINING_PARAMS["Q_LEARNING"]["n_episodes"]
+DQN_LOG_INTERVAL = MODEL_TRAINING_PARAMS["DQN"]["log_interval"]
+DOUBLE_DQN_LOG_INTERVAL = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["log_interval"]
+Q_LOG_INTERVAL = MODEL_TRAINING_PARAMS["Q_LEARNING"]["log_interval"]
+
+# Legacy reward aliases
+TRAIN_USE_CLIPPING = REWARD_CONFIG["train_use_clipping"]
+EVAL_USE_CLIPPING = REWARD_CONFIG["eval_use_clipping"]
+FINAL_EVAL_USE_CLIPPING = REWARD_CONFIG["final_eval_use_clipping"]
+PENALTY_PER_MIN = REWARD_CONFIG["penalty_per_min"]
+
+# Legacy epsilon aliases
+INIT_EPSILON = DQN_HYPERPARAMS["init_epsilon"]
+MIN_EPSILON_TARGET = DQN_HYPERPARAMS["min_epsilon"]
 
 # Early stopping defaults
 EARLY_STOPPING_CONFIG = {

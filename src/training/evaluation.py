@@ -11,6 +11,7 @@ from src.log_config import get_logger
 from src.utils.envs import (
     ClosestPlaneGreedySolver,
     DQNSolver,
+    QLearningSolver,
     RandomSolver,
     run_unified_execution,
 )
@@ -87,7 +88,9 @@ class EvaluationScoreboard:
 
                 status_str = f"{'COMPLETED':>14}"
                 metric_str = (
-                    f"{'OPTIMAL':>11}" if "DQN" in solver_name else f"{'BASELINE':>11}"
+                    f"{'OPTIMAL':>11}"
+                    if "_Iter_" in solver_name
+                    else f"{'BASELINE':>11}"
                 )
 
                 logger.info(
@@ -120,14 +123,29 @@ def evaluate_iteration(eval_env, solvers, schedules_eval, iteration):
     return scoreboard
 
 
-def evaluate_final_test(final_eval_env, final_test_flights, dqn_agent, model_paths):
+def evaluate_final_test(
+    final_eval_env,
+    final_test_flights,
+    dqn_agent,
+    model_paths,
+    q_agent=None,
+    q_learning_model_paths=None,
+    double_dqn_agent=None,
+    double_dqn_model_paths=None,
+    extra_solvers=None,
+):
     """Run final evaluation on unseen test set with baselines and trained models.
 
     Args:
         final_eval_env: AirlineEnv for final evaluation
         final_test_flights: Flight list for final evaluation
         dqn_agent: DQNAgent instance
-        model_paths: Dictionary of {iteration: model_path} for trained models
+        model_paths: Dictionary of {iteration: model_path} for trained DQN model checkpoints
+        q_agent: Optional QAgent instance for Q-learning checkpoint evaluation
+        q_learning_model_paths: Optional dictionary of {iteration: model_path} for Q-learning checkpoints
+        double_dqn_agent: Optional DoubleDQNAgent instance for Double DQN checkpoint evaluation
+        double_dqn_model_paths: Optional dictionary of {iteration: model_path} for Double DQN checkpoints
+        extra_solvers: Optional dict of additional in-memory solvers to evaluate
 
     Returns:
         EvaluationScoreboard: Results from final evaluation
@@ -146,7 +164,15 @@ def evaluate_final_test(final_eval_env, final_test_flights, dqn_agent, model_pat
         )
         scoreboard.add_result("FINAL_TEST", name, p, d)
 
-    # Evaluate trained DQN models
+    # Evaluate any additional in-memory solvers
+    if extra_solvers is not None:
+        for solver_name, solver_obj in extra_solvers.items():
+            p, d = run_unified_execution(
+                final_eval_env, solver_obj, final_test_flights, solver_name
+            )
+            scoreboard.add_result("FINAL_TEST", solver_name, p, d)
+
+    # Evaluate trained DQN model checkpoints
     for iteration, model_path in model_paths.items():
         row_label = f"DQN_Iter_{iteration:02d}"
 
@@ -166,6 +192,47 @@ def evaluate_final_test(final_eval_env, final_test_flights, dqn_agent, model_pat
                 logger.error(f"Failed to evaluate checkpoint {model_path}: {e}")
         else:
             logger.warning(f"Checkpoint omitted. Missing file: {model_path}")
+
+    # Evaluate trained Q-learning model checkpoints if provided
+    if q_agent is not None and q_learning_model_paths is not None:
+        for iteration, model_path in q_learning_model_paths.items():
+            row_label = f"Q_Learning_Iter_{iteration:02d}"
+
+            if os.path.exists(model_path):
+                try:
+                    q_agent.q_table = torch.load(model_path)
+                    historical_solver = QLearningSolver(q_agent)
+
+                    p, d = run_unified_execution(
+                        final_eval_env, historical_solver, final_test_flights, row_label
+                    )
+                    scoreboard.add_result("FINAL_TEST", row_label, p, d)
+
+                except Exception as e:
+                    logger.error(f"Failed to evaluate checkpoint {model_path}: {e}")
+            else:
+                logger.warning(f"Checkpoint omitted. Missing file: {model_path}")
+
+    # Evaluate trained Double DQN model checkpoints if provided
+    if double_dqn_agent is not None and double_dqn_model_paths is not None:
+        for iteration, model_path in double_dqn_model_paths.items():
+            row_label = f"DoubleDQN_Iter_{iteration:02d}"
+
+            if os.path.exists(model_path):
+                try:
+                    double_dqn_agent.policy_net.load_state_dict(torch.load(model_path))
+                    double_dqn_agent.policy_net.eval()
+                    historical_solver = DQNSolver(double_dqn_agent)
+
+                    p, d = run_unified_execution(
+                        final_eval_env, historical_solver, final_test_flights, row_label
+                    )
+                    scoreboard.add_result("FINAL_TEST", row_label, p, d)
+
+                except Exception as e:
+                    logger.error(f"Failed to evaluate checkpoint {model_path}: {e}")
+            else:
+                logger.warning(f"Checkpoint omitted. Missing file: {model_path}")
 
     scoreboard.log_final_scoreboard()
     return scoreboard
