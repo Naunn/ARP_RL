@@ -8,7 +8,6 @@ import os
 import torch
 
 from src.agents.dqn_agent import DQNAgent
-from src.agents.q_learning_agent import QAgent
 from src.config import (
     AIRPORTS,
     CHECKPOINT_DIR,
@@ -21,7 +20,6 @@ from src.config import (
     MIN_EPSILON_TARGET,
     MIN_PASS,
     N_FLIGHTS,
-    Q_LEARNING_PARAMS,
 )
 from src.utils.dist import create_dist_dict
 from src.utils.envs import AirlineEnv
@@ -113,15 +111,9 @@ def initialize_dqn_agent(dummy_env, agent_cls=DQNAgent, hyperparams=None):
         min_epsilon=hyperparams.get("min_epsilon", MIN_EPSILON_TARGET),
         batch_size=hyperparams["batch_size"],
         tau=hyperparams["tau"],
+        hidden_dim=hyperparams.get("hidden_dim", 256),
     )
     return agent
-
-
-def initialize_q_agent(n_actions, hyperparams=None):
-    """Initialize Q-learning agent with hyperparameters from config."""
-    if hyperparams is None:
-        hyperparams = Q_LEARNING_PARAMS
-    return QAgent(n_actions=n_actions, **hyperparams)
 
 
 def load_model_checkpoint(dqn_agent, model_path):
@@ -156,11 +148,3 @@ def reset_agent_exploration(dqn_agent, n_episodes):
         1.0 / int(n_episodes * (2 / 3))
     )
     dqn_agent.epsilon_decay = computed_decay
-
-
-def reset_q_agent_exploration(q_agent):
-    """Reset Q-learning exploration parameters for a new training iteration."""
-    q_agent.epsilon = max(q_agent.epsilon, Q_LEARNING_PARAMS["epsilon"])
-    q_agent.epsilon_decay = Q_LEARNING_PARAMS["epsilon_decay"]
-    q_agent.min_epsilon = Q_LEARNING_PARAMS["min_epsilon"]
-    q_agent.use_decay = Q_LEARNING_PARAMS.get("use_decay", True)

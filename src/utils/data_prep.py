@@ -62,7 +62,6 @@ FAMILY_AVG_SPEED_KMH = {
 }
 
 
-# --- RESTORED YOUR EXACT ORIGINAL FUNCTION ---
 def read_legacy_table(file_path: str | Path, expected_cols: list[str]) -> pd.DataFrame:
     """- Use sep=r'\\s+' to collapse variable whitespace layouts.
 

@@ -17,6 +17,7 @@ class AirlineEnv:
         # fuel_price=3,
         penalty_per_min=5,
         use_clipping=True,
+        flight_window_size=16,
     ):
         self.flights = flights
         self.plane_configs = plane_configs
@@ -25,6 +26,7 @@ class AirlineEnv:
         # self.fuel_price = fuel_price
         self.penalty_per_min = penalty_per_min
         self.use_clipping = use_clipping
+        self.flight_window_size = max(1, int(flight_window_size))
 
         # Normalization
         start_times = [f["start"] for f in self.flights]
@@ -36,19 +38,21 @@ class AirlineEnv:
 
         self.max_speed = max(config["speed"] for config in self.plane_configs.values())
         self.max_seats = max(config["seats"] for config in self.plane_configs.values())
-        # self.max_fuel_use = max(
-        #     config["fuel_use"] for config in self.plane_configs.values()
-        # )
-        self.max_base_fare = max(
-            config["base_fare"] for config in self.plane_configs.values()
+        self.max_hourly_cost = max(
+            config.get("hourly_cost", 0.0) for config in self.plane_configs.values()
         )
-        self.max_rate_per_km = max(
-            config["rate_per_km"] for config in self.plane_configs.values()
+        self.max_fixed_cost = max(
+            config.get("fixed_cost", 0.0) for config in self.plane_configs.values()
         )
         self.max_reloc_dist = max(dist_dict.values()) if dist_dict else 1.0
+        self.default_hub = "lodz"
 
         # Build stable indexing for strings -> neural arrays
-        self.cities = sorted(list(set(cities + ["lodz"])))
+        plane_starts = [
+            cfg.get("initial_airport", self.default_hub)
+            for cfg in self.plane_configs.values()
+        ]
+        self.cities = sorted(list(set(cities + plane_starts + [self.default_hub])))
         self.city_to_idx = {city: i for i, city in enumerate(self.cities)}
 
         self.reset()
@@ -56,7 +60,13 @@ class AirlineEnv:
     def reset(self):
         self.current_f_idx = 0
         self.times = tuple([0.0] * len(self.planes))
-        self.locs = tuple(["lodz"] * len(self.planes))
+        self.locs = tuple(
+            [
+                self.plane_configs[p].get("initial_airport", self.default_hub)
+                for p in self.planes
+            ]
+        )
+        self.used_planes = tuple([False] * len(self.planes))
         return (self.times, self.locs, self.current_f_idx)
 
     def reset_with_schedule(self, new_flights):
@@ -97,10 +107,14 @@ class AirlineEnv:
             plane_cfg = self.plane_configs[plane_name]
             fleet_elements.append(float(plane_cfg["seats"]) / self.max_seats)
             fleet_elements.append(float(plane_cfg["speed"]) / self.max_speed)
-            # fleet_elements.append(float(plane_cfg["fuel_use"]) / self.max_fuel_use)
             fleet_elements.append(
-                float(plane_cfg["rate_per_km"]) / self.max_rate_per_km
+                float(plane_cfg.get("hourly_cost", 0.0))
+                / max(1.0, self.max_hourly_cost)
             )
+            fleet_elements.append(
+                float(plane_cfg.get("fixed_cost", 0.0)) / max(1.0, self.max_fixed_cost)
+            )
+            fleet_elements.append(1.0 if self.used_planes[plane_idx] else 0.0)
 
             if active_origin is not None:
                 reloc_dist = self.dist_dict.get(
@@ -134,8 +148,17 @@ class AirlineEnv:
             fleet_elements.extend([0.0, 0.0, 0.0, 0.0])
 
         # FLIGHT LIST (Variable Dimension: N x Features)
+        # Use a fixed-size lookahead window so the full schedule remains in the
+        # episode, but each forward pass only encodes nearby flights.
         flight_matrix = []
-        for f in self.flights:
+        if active_flight is not None:
+            window_start = f_idx
+            window_end = min(len(self.flights), window_start + self.flight_window_size)
+            window_flights = self.flights[window_start:window_end]
+        else:
+            window_flights = []
+
+        for f in window_flights:
             f_orig = float(self.city_to_idx.get(f["origin"], 0)) / max(
                 1, num_cities - 1
             )
@@ -143,6 +166,9 @@ class AirlineEnv:
             f_start = float(f["start"]) / self.operation_time
             f_pass = float(f["pass"]) / self.avg_pass
             flight_matrix.append([f_orig, f_dest, f_start, f_pass])
+
+        while len(flight_matrix) < self.flight_window_size:
+            flight_matrix.append([0.0, 0.0, 0.0, 0.0])
 
         # Return them wrapped up as a tuple of numpy arrays
         return (
@@ -159,7 +185,7 @@ class AirlineEnv:
         n_cities = len(self.cities)
 
         per_plane_features = (
-            1 + n_cities + 5
+            1 + n_cities + 7
         )  # time + location one-hot + static and relocation features
         fleet_dim = n_planes * per_plane_features + 1 + 4
         flight_feature_dim = 4  # [origin_idx, dest_idx, norm_start, norm_passengers]
@@ -171,12 +197,14 @@ class AirlineEnv:
         original_times = self.times
         original_locs = self.locs
         original_idx = self.current_f_idx
+        original_used = self.used_planes
 
         res = self.step(action_idx)
 
         self.times = original_times
         self.locs = original_locs
         self.current_f_idx = original_idx
+        self.used_planes = original_used
 
         return res
 
@@ -197,28 +225,43 @@ class AirlineEnv:
         arrival_at_dest = actual_start + (flight_dist / (p_cfg["speed"] / 60))
 
         # Economics
-        ticket_price = p_cfg["base_fare"] + (flight_dist * p_cfg["rate_per_km"])
-        revenue = min(f["pass"], p_cfg["seats"]) * ticket_price
-        # fuel_cost = (
-        #     (reloc_dist + flight_dist) * (p_cfg["fuel_use"] / 100) * self.fuel_price
-        # )
+        total_ticket_price = float(f.get("total_ticket_price", 0.0))
+        total_passengers = max(
+            1.0, float(f.get("total_passenger_count", f.get("pass", 1)))
+        )
+        served_ratio = min(1.0, float(p_cfg["seats"]) / total_passengers)
+        revenue = total_ticket_price * served_ratio
+
+        total_flight_time_minutes = (reloc_dist + flight_dist) / (p_cfg["speed"] / 60)
+        operating_cost = float(p_cfg.get("hourly_cost", 0.0)) * (
+            total_flight_time_minutes / 60
+        )
+        fixed_cost = (
+            float(p_cfg.get("fixed_cost", 0.0))
+            if not self.used_planes[action_idx]
+            else 0.0
+        )
+        assignment_cost = operating_cost + fixed_cost
 
         # Reward Clipping
         delay_mins = max(0, actual_start - f["start"])
         delay_penalty = delay_mins * f["pass"] * self.penalty_per_min
         if self.use_clipping:
-            reward = revenue - min(delay_penalty, 20000)  # - fuel_cost
+            reward = revenue - assignment_cost - min(delay_penalty, 20000)
             reward = max(-30000, reward)
         else:
-            reward = revenue - delay_penalty  # - fuel_cost
+            reward = revenue - assignment_cost - delay_penalty
 
         # State Update
         new_times = list(self.times)
         new_locs = list(self.locs)
+        new_used_planes = list(self.used_planes)
         new_times[action_idx] = arrival_at_dest
         new_locs[action_idx] = f["dest"]
+        new_used_planes[action_idx] = True
 
         self.times, self.locs = tuple(new_times), tuple(new_locs)
+        self.used_planes = tuple(new_used_planes)
         self.current_f_idx += 1
         done = self.current_f_idx >= len(self.flights)
 
@@ -226,6 +269,8 @@ class AirlineEnv:
             "actual_start": actual_start,
             "arrival_at_dest": arrival_at_dest,
             "p_curr_loc": p_loc,
+            "assignment_cost": assignment_cost,
+            "revenue": revenue,
         }
 
         return (self.times, self.locs, self.current_f_idx), reward, done, info

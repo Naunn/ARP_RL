@@ -12,7 +12,6 @@ from src.config import (
     DQN_LOG_INTERVAL,
     DQN_REWARD_SCALE,
     EARLY_STOPPING_CONFIG,
-    Q_LOG_INTERVAL,
 )
 from src.log_config import get_logger
 
@@ -189,62 +188,6 @@ def train_dqn_episode(agent, env):
     return episode_reward
 
 
-def train_q_learning_iteration(
-    agent, train_env, n_episodes, iteration, log_interval=None
-):
-    """Train a Q-learning agent over episodes.
-
-    Args:
-        agent: QAgent instance
-        train_env: AirlineEnv instance
-        n_episodes: Number of episodes to train
-        iteration: Current iteration number for logging
-        log_interval: Optional custom log interval for Q-learning progress
-
-    Returns:
-        list: Scores from all episodes
-    """
-    q_scores = []
-    q_start_time = time.time()
-
-    if log_interval is None:
-        log_interval = max(Q_LOG_INTERVAL * 10, n_episodes // 10)
-        log_interval = min(log_interval, n_episodes)
-
-    for i in range(1, n_episodes + 1):
-        state = train_env.reset()
-        done = False
-        episode_reward = 0
-
-        while not done:
-            action = agent.choose_action(state, use_epsilon=True)
-            next_state, reward, done, _ = train_env.step(action)
-            agent.learn(state, action, reward, next_state, done)
-            state = next_state
-            episode_reward += reward
-
-        q_scores.append(episode_reward)
-        agent.decay_epsilon()
-
-        if i % log_interval == 0 or i == n_episodes:
-            avg_score = np.mean(q_scores[-log_interval:])
-            pct_complete = (i / n_episodes) * 100
-            elapsed = time.time() - q_start_time
-            avg_time_per_ep = elapsed / i
-            remaining_sec = int((n_episodes - i) * avg_time_per_ep)
-            eta_str = time.strftime("%H:%M:%S", time.gmtime(remaining_sec))
-            TrainingLogger.log_progress(
-                iteration,
-                pct_complete,
-                agent.epsilon,
-                avg_score,
-                eta_str,
-                model_name="Q_Learning",
-            )
-
-    return q_scores
-
-
 def train_dqn_iteration(
     agent,
     train_env,
@@ -274,6 +217,10 @@ def train_dqn_iteration(
     if log_interval is None:
         log_interval = DQN_LOG_INTERVAL
 
+    logger.info(
+        f"[{model_name or agent.__class__.__name__}] Starting training for {n_episodes} episodes"
+    )
+
     early_stop_manager = EarlyStoppingManager() if early_stopping else None
 
     for i in range(1, n_episodes + 1):
@@ -302,7 +249,7 @@ def train_dqn_iteration(
                 break
 
         # Periodic logging
-        if i % log_interval == 0 or i == n_episodes:
+        if i == 1 or i % log_interval == 0 or i == n_episodes:
             avg_score_dqn = np.mean(dqn_scores[-log_interval:])
             pct_dqn = (i / n_episodes) * 100
 

@@ -139,6 +139,7 @@ class DQNAgent:
         min_epsilon=0.01,
         batch_size=64,
         tau=0.005,
+        hidden_dim=256,
     ):
         self.fleet_dim = fleet_dim
         self.flight_feature_dim = flight_feature_dim
@@ -154,11 +155,11 @@ class DQNAgent:
 
         # Main Network (used to pick actions and updated every step)
         self.policy_net = AttentionPoolingQNetwork(
-            fleet_dim, flight_feature_dim, n_actions=n_actions
+            fleet_dim, flight_feature_dim, hidden_dim=hidden_dim, n_actions=n_actions
         ).to(self.device)
         # Target Network (held stable to compute steady bellman targets)
         self.target_net = AttentionPoolingQNetwork(
-            fleet_dim, flight_feature_dim, n_actions=n_actions
+            fleet_dim, flight_feature_dim, hidden_dim=hidden_dim, n_actions=n_actions
         ).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
