@@ -163,22 +163,22 @@ effective_dqn_episodes = scale_episode_budget(
     N_DQN_EPISODES,
     baseline_flights=N_FLIGHTS,
     actual_flights=len(flight_pool),
-    minimum=500,
+    minimum=1000,
 )
 effective_double_dqn_episodes = scale_episode_budget(
     N_DOUBLE_DQN_EPISODES,
     baseline_flights=N_FLIGHTS,
     actual_flights=len(flight_pool),
-    minimum=500,
+    minimum=1000,
 )
 
 effective_dqn_log_interval = (
-    1
+    100
     if len(flight_pool) >= 200
     else max(1, min(DQN_LOG_INTERVAL, effective_dqn_episodes // 20))
 )
 effective_double_dqn_log_interval = (
-    1
+    100
     if len(flight_pool) >= 200
     else max(1, min(DOUBLE_DQN_LOG_INTERVAL, effective_double_dqn_episodes // 20))
 )

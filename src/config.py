@@ -81,8 +81,8 @@ MODEL_HYPERPARAMS = {
 }
 
 MODEL_TRAINING_PARAMS = {
-    "DQN": {"n_episodes": 5_000, "log_interval": 200},
-    "DOUBLE_DQN": {"n_episodes": 5_000, "log_interval": 200},
+    "DQN": {"n_episodes": 50_000, "log_interval": 500},
+    "DOUBLE_DQN": {"n_episodes": 50_000, "log_interval": 500},
     "Q_LEARNING": {"n_episodes": 100_000, "log_interval": 2_000},
 }
 
