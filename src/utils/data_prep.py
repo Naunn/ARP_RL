@@ -24,6 +24,7 @@ DATA_COLUMNS = {
             "hourly_cost",
             "initial_airport",
             "seats",
+            "speed",
         ],
     },
     "dist": {
@@ -48,6 +49,16 @@ DATA_COLUMNS = {
             "duration_min",
         ],
     },
+}
+
+# Fixed family-level average cruise speeds in km/h.
+FAMILY_AVG_SPEED_KMH = {
+    "Airbus": 840,
+    "BAE": 750,
+    "CRJ": 810,
+    "ERJ": 830,
+    "Fokker": 845,
+    "TranspCom": 0,
 }
 
 
@@ -125,7 +136,7 @@ def load_all_clean_data(
         .astype(str)
         .apply(lambda x: sum(int(part) for part in x.split("/")))
     )
-    print(aircraft)
+    aircraft["speed"] = aircraft["family"].map(FAMILY_AVG_SPEED_KMH)
 
     return {
         "flights": flights[DATA_COLUMNS["flights"]["use"]],

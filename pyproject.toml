@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "airportsdata>=20260315",
     "black>=26.1.0",
     "geopy>=2.4.1",
     "isort>=7.0.0",
