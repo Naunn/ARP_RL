@@ -1,12 +1,12 @@
 import copy
+import sys
+from pathlib import Path
 
-import numpy as np
 import torch
 
 from src.agents.dqn_agent import DoubleDQNAgent
 from src.config import (
     AIRPORTS,
-    CITIES,
     DOUBLE_DQN_HYPERPARAMS,
     DOUBLE_DQN_LOG_INTERVAL,
     DQN_LOG_INTERVAL,
@@ -43,7 +43,6 @@ from src.training import (
     train_dqn_iteration,
     train_q_learning_iteration,
 )
-from src.utils.disruptions import DisruptionGenerator
 from src.utils.envs import (
     AirlineEnv,
     ClosestPlaneGreedySolver,
@@ -51,10 +50,12 @@ from src.utils.envs import (
     QLearningSolver,
     RandomSolver,
 )
-from src.utils.schedule import (
-    check_global_feasibility,
-    generate_trap_schedule,
-)
+from src.utils.schedule import check_global_feasibility, generate_trap_schedule
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 
 logger = get_logger("plane_assignment")
 
@@ -63,6 +64,13 @@ setup_checkpoint_dir()
 
 # Initialize static data
 dist_dict, PLANES, num_planes = initialize_static_data()
+
+# # new
+# distances = pd.read_csv("data/training/distances.csv")
+# AIRPORTS = list(set(distances.origin).union(set(distances.destination)))
+# dist_dict = create_dist_dict_from_airports(airports_list=AIRPORTS)
+# PLANES = pd.read_csv("data/training/aircraft.csv")
+# num_planes = PLANES.aircraft_id.nunique()
 
 # Initialize agents
 dummy_env = initialize_dummy_environment(dist_dict, PLANES)
@@ -94,26 +102,26 @@ for iteration in range(1, N_ITERATIONS + 1):
         pass_range=(MIN_PASS, MAX_PASS),
     )
 
-    # Generate disrupted variant for robustness testing
-    dg = DisruptionGenerator(CITIES, dist_dict)
-    FLIGHTS_TEST = dg.generate(
-        FLIGHTS,
-        actions=[
-            {
-                "action": "add_delay",
-                "target": "random",
-                "count": max(1, N_FLIGHTS // 4),
-                "min_delay": 60,
-                "max_delay": 180,
-            },
-            {
-                "action": "replace_airport",
-                "target": list(np.random.choice(AIRPORTS)),
-                "field": "origin",
-                "method": "closest",
-            },
-        ],
-    )
+    # # Generate disrupted variant for robustness testing
+    # dg = DisruptionGenerator(CITIES, dist_dict)
+    # FLIGHTS_TEST = dg.generate(
+    #     FLIGHTS,
+    #     actions=[
+    #         {
+    #             "action": "add_delay",
+    #             "target": "random",
+    #             "count": max(1, N_FLIGHTS // 4),
+    #             "min_delay": 60,
+    #             "max_delay": 180,
+    #         },
+    #         {
+    #             "action": "replace_airport",
+    #             "target": list(np.random.choice(AIRPORTS)),
+    #             "field": "origin",
+    #             "method": "closest",
+    #         },
+    #     ],
+    # )
 
     # Check feasibility
     max_req_planes, utilization = check_global_feasibility(
@@ -211,7 +219,7 @@ for iteration in range(1, N_ITERATIONS + 1):
         "DQN_Agent": DQNSolver(copy.deepcopy(dqn_agent)),
         "Double_DQN": DQNSolver(copy.deepcopy(double_dqn_agent)),
     }
-    schedules_eval = {"TRAINING_DATA": FLIGHTS, "DISRUPTION_TEST": FLIGHTS_TEST}
+    schedules_eval = {"TRAINING_DATA": FLIGHTS}  # , "DISRUPTION_TEST": FLIGHTS_TEST}
 
     evaluate_iteration(eval_env, solvers, schedules_eval, iteration)
 

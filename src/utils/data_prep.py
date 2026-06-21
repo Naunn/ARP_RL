@@ -64,10 +64,12 @@ FAMILY_AVG_SPEED_KMH = {
 
 # --- RESTORED YOUR EXACT ORIGINAL FUNCTION ---
 def read_legacy_table(file_path: str | Path, expected_cols: list[str]) -> pd.DataFrame:
-    """
-    - Use sep=r'\\s+' to collapse variable whitespace layouts.
-    - Use comment='#' to let pandas natively drop trailing metadata lines or comments.
-    - Slice to expected length to strip away erratic spacing-induced empty columns.
+    """- Use sep=r'\\s+' to collapse variable whitespace layouts.
+
+    - Use comment='#' to let pandas natively drop trailing metadata lines or
+    comments.
+    - Slice to expected length to strip away erratic spacing-induced empty
+    columns.
     """
     df = pd.read_csv(file_path, sep=r"\s+", header=None, engine="python")
     df = df.iloc[:-1, :]
@@ -146,8 +148,24 @@ def load_all_clean_data(
     }
 
 
+def save_dataframes(data_dict: dict[str, pd.DataFrame], output_dir: str | Path):
+    """Creates the output directory if it doesn't exist and saves all dataframes
+
+    as CSV files without index columns.
+    """
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    for name, df in data_dict.items():
+        file_path = out_path / f"{name}.csv"
+        df.to_csv(file_path, index=False)
+        print(f"Saved: {file_path}")
+
+
 if __name__ == "__main__":
     DATA_DIR = Path("/home/bartosz/repos/ARP_RL/data/A1_6088570/A01_6088570")
+    # Setting target save directory to data/training/ relative to your project base
+    OUTPUT_DIR = Path("data/training/")
 
     dfs = load_all_clean_data(
         flights_p=DATA_DIR / "flights.csv",
@@ -156,4 +174,5 @@ if __name__ == "__main__":
         aircraft_p=DATA_DIR / "aircraft.csv",
     )
 
-    print(dfs)
+    # Save the processed tables
+    save_dataframes(dfs, OUTPUT_DIR)

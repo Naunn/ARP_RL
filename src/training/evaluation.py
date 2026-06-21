@@ -210,7 +210,7 @@ def evaluate_final_test(
             if os.path.exists(model_path):
                 try:
                     eval_agent = copy.deepcopy(q_agent)
-                    eval_agent.q_table = torch.load(model_path)
+                    eval_agent.q_table = torch.load(model_path, weights_only=False)
                     historical_solver = QLearningSolver(eval_agent)
 
                     p, d = run_unified_execution(

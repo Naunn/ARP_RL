@@ -1,5 +1,7 @@
 import copy
+import sys
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -25,10 +27,12 @@ from src.utils.envs import (
     run_unified_execution,
 )
 from src.utils.fleet import generate_fleet
-from src.utils.schedule import (
-    check_global_feasibility,
-    generate_random_flights,
-)
+from src.utils.schedule import check_global_feasibility, generate_random_flights
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 
 logger = get_logger("plane_assignment")
 

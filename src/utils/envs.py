@@ -14,7 +14,7 @@ class AirlineEnv:
         plane_configs,
         dist_dict,
         cities,
-        fuel_price=3,
+        # fuel_price=3,
         penalty_per_min=5,
         use_clipping=True,
     ):
@@ -22,7 +22,7 @@ class AirlineEnv:
         self.plane_configs = plane_configs
         self.planes = list(plane_configs.keys())
         self.dist_dict = dist_dict
-        self.fuel_price = fuel_price
+        # self.fuel_price = fuel_price
         self.penalty_per_min = penalty_per_min
         self.use_clipping = use_clipping
 
@@ -36,9 +36,9 @@ class AirlineEnv:
 
         self.max_speed = max(config["speed"] for config in self.plane_configs.values())
         self.max_seats = max(config["seats"] for config in self.plane_configs.values())
-        self.max_fuel_use = max(
-            config["fuel_use"] for config in self.plane_configs.values()
-        )
+        # self.max_fuel_use = max(
+        #     config["fuel_use"] for config in self.plane_configs.values()
+        # )
         self.max_base_fare = max(
             config["base_fare"] for config in self.plane_configs.values()
         )
@@ -97,7 +97,7 @@ class AirlineEnv:
             plane_cfg = self.plane_configs[plane_name]
             fleet_elements.append(float(plane_cfg["seats"]) / self.max_seats)
             fleet_elements.append(float(plane_cfg["speed"]) / self.max_speed)
-            fleet_elements.append(float(plane_cfg["fuel_use"]) / self.max_fuel_use)
+            # fleet_elements.append(float(plane_cfg["fuel_use"]) / self.max_fuel_use)
             fleet_elements.append(
                 float(plane_cfg["rate_per_km"]) / self.max_rate_per_km
             )
@@ -159,7 +159,7 @@ class AirlineEnv:
         n_cities = len(self.cities)
 
         per_plane_features = (
-            1 + n_cities + 6
+            1 + n_cities + 5
         )  # time + location one-hot + static and relocation features
         fleet_dim = n_planes * per_plane_features + 1 + 4
         flight_feature_dim = 4  # [origin_idx, dest_idx, norm_start, norm_passengers]
@@ -199,18 +199,18 @@ class AirlineEnv:
         # Economics
         ticket_price = p_cfg["base_fare"] + (flight_dist * p_cfg["rate_per_km"])
         revenue = min(f["pass"], p_cfg["seats"]) * ticket_price
-        fuel_cost = (
-            (reloc_dist + flight_dist) * (p_cfg["fuel_use"] / 100) * self.fuel_price
-        )
+        # fuel_cost = (
+        #     (reloc_dist + flight_dist) * (p_cfg["fuel_use"] / 100) * self.fuel_price
+        # )
 
         # Reward Clipping
         delay_mins = max(0, actual_start - f["start"])
         delay_penalty = delay_mins * f["pass"] * self.penalty_per_min
         if self.use_clipping:
-            reward = revenue - fuel_cost - min(delay_penalty, 20000)
+            reward = revenue - min(delay_penalty, 20000)  # - fuel_cost
             reward = max(-30000, reward)
         else:
-            reward = revenue - fuel_cost - delay_penalty
+            reward = revenue - delay_penalty  # - fuel_cost
 
         # State Update
         new_times = list(self.times)
