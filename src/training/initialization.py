@@ -127,7 +127,9 @@ def load_model_checkpoint(dqn_agent, model_path):
         bool: True if loading succeeded, False otherwise
     """
     try:
-        dqn_agent.policy_net.load_state_dict(torch.load(model_path))
+        dqn_agent.policy_net.load_state_dict(
+            torch.load(model_path, map_location=dqn_agent.device)
+        )
         dqn_agent.policy_net.eval()
         return True
     except Exception:

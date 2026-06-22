@@ -185,7 +185,9 @@ def evaluate_final_test(
         if os.path.exists(model_path):
             try:
                 eval_agent = copy.deepcopy(dqn_agent)
-                eval_agent.policy_net.load_state_dict(torch.load(model_path))
+                eval_agent.policy_net.load_state_dict(
+                    torch.load(model_path, map_location=eval_agent.device)
+                )
                 eval_agent.policy_net.eval()
                 historical_solver = DQNSolver(eval_agent)
 
@@ -234,7 +236,9 @@ def evaluate_final_test(
             if os.path.exists(model_path):
                 try:
                     eval_agent = copy.deepcopy(double_dqn_agent)
-                    eval_agent.policy_net.load_state_dict(torch.load(model_path))
+                    eval_agent.policy_net.load_state_dict(
+                        torch.load(model_path, map_location=eval_agent.device)
+                    )
                     eval_agent.policy_net.eval()
                     historical_solver = DQNSolver(eval_agent)
 

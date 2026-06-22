@@ -60,6 +60,13 @@ PROJECT_ROOT = resolve_project_root()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
+    try:
+        torch.set_float32_matmul_precision("high")
+    except AttributeError:
+        pass
+
 
 logger = get_logger("plane_assignment")
 

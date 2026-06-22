@@ -152,6 +152,7 @@ class DQNAgent:
         self.tau = tau
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.use_amp = self.device.type == "cuda"
 
         # Main Network (used to pick actions and updated every step)
         self.policy_net = AttentionPoolingQNetwork(
@@ -167,6 +168,24 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.loss_fn = nn.SmoothL1Loss(reduction="none")
         self.memory = ReplayBuffer(capacity=20000)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+
+    def _to_device_tensor(self, value, dtype=torch.float32):
+        return torch.as_tensor(value, dtype=dtype, device=self.device)
+
+    def _optimizer_step(self, loss):
+        self.optimizer.zero_grad(set_to_none=True)
+
+        if self.use_amp:
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
+            self.optimizer.step()
 
     def choose_action(self, state_tuple, use_epsilon=True):
         """Selects action using epsilon-greedy strategy over structural environment states."""
@@ -176,9 +195,9 @@ class DQNAgent:
         # Unpack the tuple internal array layers inside the method scope
         fleet_state, flight_matrix = state_tuple
 
-        with torch.no_grad():
-            fleet_t = torch.FloatTensor(fleet_state).to(self.device)
-            flights_t = torch.FloatTensor(flight_matrix).to(self.device)
+        with torch.inference_mode():
+            fleet_t = self._to_device_tensor(fleet_state)
+            flights_t = self._to_device_tensor(flight_matrix)
             q_values = self.policy_net(fleet_t, flights_t)
             return q_values.argmax(dim=1).item()
 
@@ -232,32 +251,32 @@ class DQNAgent:
         ) = self._sample_training_batch()
 
         # Convert layout blocks into PyTorch Tensors
-        fleet_t = torch.FloatTensor(fleet_b).to(self.device)
-        flights_t = torch.FloatTensor(flights_b).to(self.device)
-        actions_t = torch.LongTensor(actions).unsqueeze(1).to(self.device)
-        rewards_t = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        next_fleet_t = torch.FloatTensor(next_fleet_b).to(self.device)
-        next_flights_t = torch.FloatTensor(next_flights_b).to(self.device)
-        dones_t = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
-        weights_t = torch.FloatTensor(weights).unsqueeze(1).to(self.device)
+        fleet_t = self._to_device_tensor(fleet_b)
+        flights_t = self._to_device_tensor(flights_b)
+        actions_t = self._to_device_tensor(actions, dtype=torch.long).unsqueeze(1)
+        rewards_t = self._to_device_tensor(rewards).unsqueeze(1)
+        next_fleet_t = self._to_device_tensor(next_fleet_b)
+        next_flights_t = self._to_device_tensor(next_flights_b)
+        dones_t = self._to_device_tensor(dones).unsqueeze(1)
+        weights_t = self._to_device_tensor(weights).unsqueeze(1)
 
-        # Get predicted Q-values for the actions taken
-        current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            # Get predicted Q-values for the actions taken
+            current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
 
-        # Calculate target values using the Target Network (Bellman Equation)
-        with torch.no_grad():
-            max_next_q = self.target_net(next_fleet_t, next_flights_t).max(
-                dim=1, keepdim=True
-            )[0]
-            target_q = rewards_t + (1 - dones_t) * self.gamma * max_next_q
+            # Calculate target values using the Target Network (Bellman Equation)
+            with torch.no_grad():
+                max_next_q = self.target_net(next_fleet_t, next_flights_t).max(
+                    dim=1, keepdim=True
+                )[0]
+                target_q = rewards_t + (1 - dones_t) * self.gamma * max_next_q
 
-        loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
+            loss, td_errors = self._compute_weighted_td_loss(
+                current_q, target_q, weights_t
+            )
 
         # Optimize the Policy Network
-        self.optimizer.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
-        self.optimizer.step()
+        self._optimizer_step(loss)
 
         self.memory.update_priorities(
             indices,
@@ -288,31 +307,31 @@ class DoubleDQNAgent(DQNAgent):
             dones,
         ) = self._sample_training_batch()
 
-        fleet_t = torch.FloatTensor(fleet_b).to(self.device)
-        flights_t = torch.FloatTensor(flights_b).to(self.device)
-        actions_t = torch.LongTensor(actions).unsqueeze(1).to(self.device)
-        rewards_t = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        next_fleet_t = torch.FloatTensor(next_fleet_b).to(self.device)
-        next_flights_t = torch.FloatTensor(next_flights_b).to(self.device)
-        dones_t = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
-        weights_t = torch.FloatTensor(weights).unsqueeze(1).to(self.device)
+        fleet_t = self._to_device_tensor(fleet_b)
+        flights_t = self._to_device_tensor(flights_b)
+        actions_t = self._to_device_tensor(actions, dtype=torch.long).unsqueeze(1)
+        rewards_t = self._to_device_tensor(rewards).unsqueeze(1)
+        next_fleet_t = self._to_device_tensor(next_fleet_b)
+        next_flights_t = self._to_device_tensor(next_flights_b)
+        dones_t = self._to_device_tensor(dones).unsqueeze(1)
+        weights_t = self._to_device_tensor(weights).unsqueeze(1)
 
-        current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
+        with torch.cuda.amp.autocast(enabled=self.use_amp):
+            current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
 
-        with torch.no_grad():
-            next_policy_q = self.policy_net(next_fleet_t, next_flights_t)
-            next_actions = next_policy_q.argmax(dim=1, keepdim=True)
-            next_target_q = self.target_net(next_fleet_t, next_flights_t).gather(
-                1, next_actions
+            with torch.no_grad():
+                next_policy_q = self.policy_net(next_fleet_t, next_flights_t)
+                next_actions = next_policy_q.argmax(dim=1, keepdim=True)
+                next_target_q = self.target_net(next_fleet_t, next_flights_t).gather(
+                    1, next_actions
+                )
+                target_q = rewards_t + (1 - dones_t) * self.gamma * next_target_q
+
+            loss, td_errors = self._compute_weighted_td_loss(
+                current_q, target_q, weights_t
             )
-            target_q = rewards_t + (1 - dones_t) * self.gamma * next_target_q
 
-        loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
-        self.optimizer.step()
+        self._optimizer_step(loss)
 
         self.memory.update_priorities(
             indices,
