@@ -60,9 +60,7 @@ class ReplayBuffer:
         self.priorities = np.zeros(capacity, dtype=np.float32)
         self.position = 0
 
-    def push(
-        self, fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done
-    ):
+    def push(self, fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done):
         transition = (
             fleet_state,
             flight_matrix,
@@ -88,9 +86,7 @@ class ReplayBuffer:
         scaled_priorities = priorities**self.alpha
         sampling_probabilities = scaled_priorities / scaled_priorities.sum()
 
-        indices = np.random.choice(
-            len(self.buffer), batch_size, p=sampling_probabilities
-        )
+        indices = np.random.choice(len(self.buffer), batch_size, p=sampling_probabilities)
         samples = [self.buffer[idx] for idx in indices]
 
         weights = (len(self.buffer) * sampling_probabilities[indices]) ** (-self.beta)
@@ -168,7 +164,7 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.loss_fn = nn.SmoothL1Loss(reduction="none")
         self.memory = ReplayBuffer(capacity=20000)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)  # type: ignore
 
     def _to_device_tensor(self, value, dtype=torch.float32):
         return torch.as_tensor(value, dtype=dtype, device=self.device)
@@ -205,23 +201,15 @@ class DQNAgent:
         """Smoothly dials back exploration over training iterations."""
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
 
-    def store_transition(
-        self, fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done
-    ):
+    def store_transition(self, fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done):
         """Pushes a structural state transformation tracking sequence to the replay memory."""
-        self.memory.push(
-            fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done
-        )
+        self.memory.push(fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done)
 
     def _polyak_update(self):
         """Blends weights fractionally from policy network to target network."""
         with torch.no_grad():
-            for target_param, policy_param in zip(
-                self.target_net.parameters(), self.policy_net.parameters()
-            ):
-                target_param.data.copy_(
-                    self.tau * policy_param.data + (1.0 - self.tau) * target_param.data
-                )
+            for target_param, policy_param in zip(self.target_net.parameters(), self.policy_net.parameters()):
+                target_param.data.copy_(self.tau * policy_param.data + (1.0 - self.tau) * target_param.data)
 
     def _sample_training_batch(self):
         return self.memory.sample(self.batch_size)
@@ -260,20 +248,16 @@ class DQNAgent:
         dones_t = self._to_device_tensor(dones).unsqueeze(1)
         weights_t = self._to_device_tensor(weights).unsqueeze(1)
 
-        with torch.cuda.amp.autocast(enabled=self.use_amp):
+        with torch.autocast(device_type="cuda", enabled=self.use_amp):
             # Get predicted Q-values for the actions taken
             current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
 
             # Calculate target values using the Target Network (Bellman Equation)
             with torch.no_grad():
-                max_next_q = self.target_net(next_fleet_t, next_flights_t).max(
-                    dim=1, keepdim=True
-                )[0]
+                max_next_q = self.target_net(next_fleet_t, next_flights_t).max(dim=1, keepdim=True)[0]
                 target_q = rewards_t + (1 - dones_t) * self.gamma * max_next_q
 
-            loss, td_errors = self._compute_weighted_td_loss(
-                current_q, target_q, weights_t
-            )
+            loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
 
         # Optimize the Policy Network
         self._optimizer_step(loss)
@@ -316,20 +300,16 @@ class DoubleDQNAgent(DQNAgent):
         dones_t = self._to_device_tensor(dones).unsqueeze(1)
         weights_t = self._to_device_tensor(weights).unsqueeze(1)
 
-        with torch.cuda.amp.autocast(enabled=self.use_amp):
+        with torch.autocast(device_type="cuda", enabled=self.use_amp):
             current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
 
             with torch.no_grad():
                 next_policy_q = self.policy_net(next_fleet_t, next_flights_t)
                 next_actions = next_policy_q.argmax(dim=1, keepdim=True)
-                next_target_q = self.target_net(next_fleet_t, next_flights_t).gather(
-                    1, next_actions
-                )
+                next_target_q = self.target_net(next_fleet_t, next_flights_t).gather(1, next_actions)
                 target_q = rewards_t + (1 - dones_t) * self.gamma * next_target_q
 
-            loss, td_errors = self._compute_weighted_td_loss(
-                current_q, target_q, weights_t
-            )
+            loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
 
         self._optimizer_step(loss)
 

@@ -1,5 +1,7 @@
 import random
 
+import pandas as pd
+
 
 def generate_random_flights(n, cities, start_time_range, pass_range):
     """
@@ -89,9 +91,7 @@ def check_global_feasibility(flights, planes, plane_configs, dist_dict):
         return 0, 0.0
 
     # Calculate Average Fleet Speed
-    avg_speed_km_min = (
-        sum(p["speed"] for p in plane_configs.values()) / len(plane_configs)
-    ) / 60
+    avg_speed_km_min = (sum(p["speed"] for p in plane_configs.values()) / len(plane_configs)) / 60
 
     events = []
     total_workload_mins = 0
@@ -127,10 +127,30 @@ def check_global_feasibility(flights, planes, plane_configs, dist_dict):
     # If I spread all the work out perfectly over 24 hours, how busy are my planes?
     # <20% => not tht busy
     # >80% => solution without delays may be impossible
-    utilization = (
-        (total_workload_mins / total_available_mins) * 100
-        if total_available_mins > 0
-        else 0
-    )
+    utilization = (total_workload_mins / total_available_mins) * 100 if total_available_mins > 0 else 0
 
     return max_planes_needed, utilization
+
+
+def build_flight_pool(flights_df: pd.DataFrame, itineraries_df: pd.DataFrame):
+    merged = flights_df.merge(itineraries_df, on="flight_id", how="left")
+    merged["total_ticket_price"] = merged["total_ticket_price"].fillna(0.0)
+    merged["total_passenger_count"] = merged["total_passenger_count"].fillna(0)
+    merged = merged[merged.total_ticket_price > 0]
+
+    pool = []
+    for row in merged.to_dict("records"):
+        passenger_count = int(max(1, round(float(row["total_passenger_count"]))))
+        pool.append(
+            {
+                "id": int(row["flight_id"]),
+                "origin": str(row["origin"]).strip().upper(),
+                "dest": str(row["destination"]).strip().upper(),
+                "start": int(row["start_min"]),
+                "pass": passenger_count,
+                "total_passenger_count": passenger_count,
+                "total_ticket_price": float(row["total_ticket_price"]),
+            }
+        )
+
+    return pool

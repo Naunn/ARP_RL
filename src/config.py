@@ -1,8 +1,13 @@
-CITIES = [
+"""Central application configurations for reinforcement learning airline schedules."""
+
+from typing import Any, Dict, List
+
+# --- ENVIRONMENT SEED DATA ---
+CITIES: List[str] = [
     "praga",
     "milan",
     "lodz",
-    "paris",  # Added for more complexity
+    "paris",
     "madryt",
     "berlin",
     "london",
@@ -11,26 +16,16 @@ CITIES = [
     "dubai",
 ]
 
-AIRPORTS = [
-    # "praga",
-    # "milan",
-    "lodz",
-    # "paris",
-    # "madryt",
-    "berlin",
-    # "london",
-    "barcelona",
-    # "qatar",
-    # "dubai",
-]
-N_FLIGHTS = 10
-N_EVAL_FLIGHTS = N_FLIGHTS * 5
-FIRST_FLIGHT_HOUR = 5
-LAST_FLIGHT_HOUR = 23
-MIN_PASS = 100
-MAX_PASS = 180
+AIRPORTS: List[str] = ["lodz", "berlin", "barcelona"]
 
-PLANES_TEMPLATES = {
+N_FLIGHTS: int = 10
+N_EVAL_FLIGHTS: int = N_FLIGHTS * 5
+FIRST_FLIGHT_HOUR: int = 5
+LAST_FLIGHT_HOUR: int = 23
+MIN_PASS: int = 100
+MAX_PASS: int = 180
+
+PLANES_TEMPLATES: Dict[str, Dict[str, Any]] = {
     "BOEING": {
         "fuel_use": 900.0,
         "seats": 150,
@@ -47,19 +42,18 @@ PLANES_TEMPLATES = {
     },
 }
 
-# --- TRAINING / EXPERIMENT CONFIG ---
-# Iteration control and model-specific training hyperparameters
-N_ITERATIONS = 1
+N_ITERATIONS: int = 1
 
-MODEL_HYPERPARAMS = {
+# --- STRUCTURAL CONFIGURATIONS ---
+MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
     "DQN": {
-        "lr": 0.0001,
+        "lr": 0.000075,
         "gamma": 0.95,
         "epsilon_decay": 0.999,
         "init_epsilon": 0.5,
         "min_epsilon": 0.1,
-        "batch_size": 64,
-        "tau": 0.005,
+        "batch_size": 128,
+        "tau": 0.001,
     },
     "DOUBLE_DQN": {
         "lr": 0.000075,
@@ -67,75 +61,33 @@ MODEL_HYPERPARAMS = {
         "epsilon_decay": 0.999,
         "init_epsilon": 0.5,
         "min_epsilon": 0.1,
-        "batch_size": 64,
-        "tau": 0.005,
-    },
-    "Q_LEARNING": {
-        "lr": 0.1,
-        "gamma": 0.9,
-        "epsilon": 1.0,
-        "epsilon_decay": 0.999995,
-        "min_epsilon": 0.01,
-        "use_decay": True,
+        "batch_size": 128,
+        "tau": 0.001,
     },
 }
 
-MODEL_TRAINING_PARAMS = {
-    "DQN": {"n_episodes": 50_000, "log_interval": 500},
-    "DOUBLE_DQN": {"n_episodes": 50_000, "log_interval": 500},
-    "Q_LEARNING": {"n_episodes": 100_000, "log_interval": 2_000},
+MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
+    "DQN": {"n_episodes": 10, "log_interval": 1},
+    "DOUBLE_DQN": {"n_episodes": 10, "log_interval": 1},
 }
 
-# Training stability controls for value-based agents.
-RL_TRAINING_CONFIG = {
+RL_TRAINING_CONFIG: Dict[str, float] = {
     "dqn_reward_scale": 0.001,
 }
 
-# Reward-shaping controls. Keeping clipping enabled prevents delay penalties from
-# dominating training and evaluation when schedules become highly congested.
-REWARD_CONFIG = {
+REWARD_CONFIG: Dict[str, Any] = {
     "train_use_clipping": True,
     "eval_use_clipping": True,
     "final_eval_use_clipping": True,
     "penalty_per_min": 5,
 }
 
-# Legacy aliases for compatibility with existing training code
-DQN_HYPERPARAMS = MODEL_HYPERPARAMS["DQN"]
-DOUBLE_DQN_HYPERPARAMS = MODEL_HYPERPARAMS["DOUBLE_DQN"]
-Q_LEARNING_PARAMS = MODEL_HYPERPARAMS["Q_LEARNING"]
-
-# Legacy training parameter aliases
-N_DQN_EPISODES = MODEL_TRAINING_PARAMS["DQN"]["n_episodes"]
-N_DOUBLE_DQN_EPISODES = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["n_episodes"]
-N_Q_EPISODES = MODEL_TRAINING_PARAMS["Q_LEARNING"]["n_episodes"]
-DQN_LOG_INTERVAL = MODEL_TRAINING_PARAMS["DQN"]["log_interval"]
-DOUBLE_DQN_LOG_INTERVAL = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["log_interval"]
-Q_LOG_INTERVAL = MODEL_TRAINING_PARAMS["Q_LEARNING"]["log_interval"]
-
-# Legacy RL tuning aliases
-DQN_REWARD_SCALE = RL_TRAINING_CONFIG["dqn_reward_scale"]
-
-# Legacy reward aliases
-TRAIN_USE_CLIPPING = REWARD_CONFIG["train_use_clipping"]
-EVAL_USE_CLIPPING = REWARD_CONFIG["eval_use_clipping"]
-FINAL_EVAL_USE_CLIPPING = REWARD_CONFIG["final_eval_use_clipping"]
-PENALTY_PER_MIN = REWARD_CONFIG["penalty_per_min"]
-
-# Legacy epsilon aliases
-INIT_EPSILON = DQN_HYPERPARAMS["init_epsilon"]
-MIN_EPSILON_TARGET = DQN_HYPERPARAMS["min_epsilon"]
-
-# Early stopping defaults
-EARLY_STOPPING_CONFIG = {
+EARLY_STOPPING_CONFIG: Dict[str, Any] = {
     "patience": 3000,
     "rolling_window_size": 300,
     "improvement_threshold": 3000,
     "min_epsilon_to_stop": 0.12,
 }
 
-# Checkpoint directory
-CHECKPOINT_DIR = "checkpoints"
-
-# Default fleet configuration used by training utilities
-FLEET_CONFIG = {"BOEING": 2, "AIRBUS": 2}
+CHECKPOINT_DIR: str = "checkpoints"
+FLEET_CONFIG: Dict[str, int] = {"BOEING": 2, "AIRBUS": 2}
