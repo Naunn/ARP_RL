@@ -47,28 +47,28 @@ N_ITERATIONS: int = 1
 # --- STRUCTURAL CONFIGURATIONS ---
 MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
     "DQN": {
-        "lr": 0.000075,
-        "gamma": 0.95,
-        "epsilon_decay": 0.999,
-        "init_epsilon": 0.5,
-        "min_epsilon": 0.1,
-        "batch_size": 128,
+        "lr": 0.0002,
+        "gamma": 0.99,
+        "epsilon_decay": 0.9995,
+        "init_epsilon": 0.8,
+        "min_epsilon": 0.02,
+        "batch_size": 256,
         "tau": 0.001,
     },
     "DOUBLE_DQN": {
-        "lr": 0.000075,
-        "gamma": 0.95,
-        "epsilon_decay": 0.999,
-        "init_epsilon": 0.5,
-        "min_epsilon": 0.1,
-        "batch_size": 128,
+        "lr": 0.0002,
+        "gamma": 0.99,
+        "epsilon_decay": 0.9995,
+        "init_epsilon": 0.8,
+        "min_epsilon": 0.02,
+        "batch_size": 256,
         "tau": 0.001,
     },
 }
 
 MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
-    "DQN": {"n_episodes": 10, "log_interval": 1},
-    "DOUBLE_DQN": {"n_episodes": 10, "log_interval": 1},
+    "DQN": {"n_episodes": 10000, "log_interval": 100},
+    "DOUBLE_DQN": {"n_episodes": 10000, "log_interval": 100},
 }
 
 RL_TRAINING_CONFIG: Dict[str, float] = {
@@ -83,10 +83,10 @@ REWARD_CONFIG: Dict[str, Any] = {
 }
 
 EARLY_STOPPING_CONFIG: Dict[str, Any] = {
-    "patience": 3000,
-    "rolling_window_size": 300,
-    "improvement_threshold": 3000,
-    "min_epsilon_to_stop": 0.12,
+    "patience": 10000,
+    "rolling_window_size": 500,
+    "improvement_threshold": 100.0,
+    "min_epsilon_to_stop": 0.02,
 }
 
 CHECKPOINT_DIR: str = "checkpoints"

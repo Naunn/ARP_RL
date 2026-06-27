@@ -13,6 +13,7 @@ from src.config import (
     MODEL_TRAINING_PARAMS,
     RL_TRAINING_CONFIG,
 )
+from src.utils.envs import ClosestPlaneGreedySolver
 from src.utils.logging import log_checkpoint, log_early_stop, log_progress, logger
 
 
@@ -69,17 +70,35 @@ def reset_agent_exploration(agent, n_episodes: int, hyperparams: dict):
 def train_dqn_episode(agent, env) -> float:
     """Executes a single continuous experience collection phase episode loop step."""
     state_tuple = env.get_vector_state(env.reset())
+    action_mask = env.get_action_mask()
+    expert_solver = ClosestPlaneGreedySolver()
     done, episode_reward, scale = False, 0.0, RL_TRAINING_CONFIG["dqn_reward_scale"]
 
     while not done:
-        action = agent.choose_action(state_tuple, use_epsilon=True)
+        expert_action = expert_solver.choose_action(state_tuple, env)
+        action = agent.choose_action(
+            state_tuple,
+            action_mask=action_mask,
+            use_epsilon=True,
+        )
         next_raw_state, reward, done, _ = env.step(action)
         next_state_tuple = env.get_vector_state(next_raw_state)
+        next_action_mask = env.get_action_mask(next_raw_state)
 
-        agent.store_transition(*state_tuple, action, reward * scale, *next_state_tuple, done)
+        agent.store_transition(
+            *state_tuple,
+            action,
+            reward * scale,
+            *next_state_tuple,
+            done,
+            action_mask,
+            next_action_mask,
+            expert_action,
+        )
         agent.learn()
 
         state_tuple = next_state_tuple
+        action_mask = next_action_mask
         episode_reward += reward
 
     agent.decay_epsilon()

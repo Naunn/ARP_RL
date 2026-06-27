@@ -148,7 +148,6 @@ def build_flight_pool(flights_df: pd.DataFrame, itineraries_df: pd.DataFrame):
                 "dest": str(row["destination"]).strip().upper(),
                 "start": int(row["start_min"]),
                 "pass": passenger_count,
-                "total_passenger_count": passenger_count,
                 "total_ticket_price": float(row["total_ticket_price"]),
             }
         )

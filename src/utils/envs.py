@@ -28,8 +28,8 @@ class AirlineEnv:
         self.penalty_per_min = penalty_per_min
         self.use_clipping = use_clipping
         self.flight_window_size = max(1, int(flight_window_size))
-
-        self.operation_time = 1440.0
+        take_offs = [p["start"] for p in self.flights]
+        self.operation_time = max(take_offs) - min(take_offs)
         self.default_hub = "lodz"
 
         # Pre-calculate invariant data extensions to avoid loop costs
@@ -68,7 +68,7 @@ class AirlineEnv:
         """Translates current raw simulation tracking structures into scalable tensor arrays."""
         times, locs, f_idx = raw_state if raw_state is not None else (self.times, self.locs, self.current_f_idx)
 
-        # 1. FLEET SYSTEM VECTOR COMPUTATION
+        # FLEET SYSTEM VECTOR COMPUTATION
         fleet_list = []
         active_f = self.flights[f_idx] if 0 <= f_idx < len(self.flights) else None
         active_origin = active_f["origin"] if active_f else None
@@ -115,7 +115,7 @@ class AirlineEnv:
         else:
             fleet_list.extend([0.0, 0.0, 0.0, 0.0])
 
-        # 2. SEQUENCE LENGTH INVARIANT LOOKAHEAD WINDOW INTERFACE MATRIX
+        # SEQUENCE LENGTH INVARIANT LOOKAHEAD WINDOW INTERFACE MATRIX
         matrix_list = []
         if active_f:
             for f in self.flights[f_idx : f_idx + self.flight_window_size]:
@@ -137,6 +137,49 @@ class AirlineEnv:
         """Tracks input dimensions to guide neural sequence structural layer sizes."""
         return (len(self.planes) * (1 + self.num_cities + 7) + 1 + 4, 4)
 
+    def get_action_mask(self, raw_state=None) -> np.ndarray:
+        """Returns a boolean mask of legal actions for the currently active flight."""
+        times, locs, f_idx = raw_state if raw_state is not None else (self.times, self.locs, self.current_f_idx)
+
+        n_actions = len(self.planes)
+        if f_idx >= len(self.flights):
+            return np.ones(n_actions, dtype=np.bool_)
+
+        f = self.flights[f_idx]
+        required_seats = float(f.get("pass", 0.0))
+
+        mask = np.zeros(n_actions, dtype=np.bool_)
+        best_capacity = float("-inf")
+        best_delay = float("inf")
+        fallback_idx = 0
+
+        for idx, p_name in enumerate(self.planes):
+            p_cfg = self.plane_configs[p_name]
+            seats = float(p_cfg.get("seats", 0.0))
+
+            reloc_dist = self.dist_dict.get((locs[idx], f["origin"]), 500)
+            actual_start = max(
+                f["start"],
+                times[idx] + (reloc_dist / (p_cfg["speed"] / 60)),
+            )
+            delay = max(0.0, actual_start - f["start"])
+
+            # Legal actions are capacity-feasible; delay is handled by reward shaping.
+            if seats >= required_seats:
+                mask[idx] = True
+
+            # Tracking fallback if ALL planes are filtered out
+            if (seats > best_capacity) or (seats == best_capacity and delay < best_delay):
+                best_capacity = seats
+                best_delay = delay
+                fallback_idx = idx
+
+        # Fallback: If no planes meet capacity + threshold, fall back to the single best available plane
+        if not mask.any():
+            mask[fallback_idx] = True
+
+        return mask
+
     def step(self, action_idx: int) -> tuple[tuple[Any, ...], float, bool, dict]:
         f = self.flights[self.current_f_idx]
         p_name = self.planes[action_idx]
@@ -150,9 +193,8 @@ class AirlineEnv:
         arrival_at_dest = actual_start + (flight_dist / (p_cfg["speed"] / 60))
 
         # Financial balance computations
-        revenue = float(f.get("total_ticket_price", 0.0)) * min(
-            1.0, float(p_cfg["seats"]) / max(1.0, float(f.get("pass", 1)))
-        )
+        served_ratio = min(1.0, float(p_cfg["seats"]) / max(1.0, float(f.get("pass", 1))))
+        revenue = float(f.get("total_ticket_price", 0.0)) * served_ratio
         operating_cost = float(p_cfg.get("hourly_cost", 0.0)) * (
             ((reloc_dist + flight_dist) / (p_cfg["speed"] / 60)) / 60
         )
@@ -160,8 +202,20 @@ class AirlineEnv:
             0.0 if self.used_planes[action_idx] else float(p_cfg.get("fixed_cost", 0.0))
         )
 
-        delay_penalty = max(0.0, actual_start - f["start"]) * f["pass"] * self.penalty_per_min
-        reward = revenue - assignment_cost - (min(delay_penalty, 20000.0) if self.use_clipping else delay_penalty)
+        delay_minutes = max(0.0, actual_start - f["start"])
+        delay_multiplier = 1.0 + min(delay_minutes / 60.0, 2.0)
+        delay_penalty = delay_minutes * f["pass"] * self.penalty_per_min * delay_multiplier
+        capacity_slack_penalty = (
+            500.0 * max(0.0, float(p_cfg["seats"]) - float(f.get("pass", 1))) / max(1.0, float(f.get("pass", 1)))
+        )
+        relocation_penalty = 0.05 * reloc_dist
+        reward = (
+            revenue
+            - assignment_cost
+            - (min(delay_penalty, 20000.0) if self.use_clipping else delay_penalty)
+            - relocation_penalty
+            - capacity_slack_penalty
+        )
         if self.use_clipping:
             reward = max(-30000.0, reward)
 
@@ -192,6 +246,11 @@ class AirlineEnv:
                 "p_curr_loc": p_loc,
                 "assignment_cost": assignment_cost,
                 "revenue": revenue,
+                "delay_minutes": delay_minutes,
+                "delay_penalty": delay_penalty,
+                "served_ratio": served_ratio,
+                "capacity_slack_penalty": capacity_slack_penalty,
+                "relocation_penalty": relocation_penalty,
             },
         )
 
@@ -208,11 +267,18 @@ class RandomSolver(BaseSolver):
 
 
 class ClosestPlaneGreedySolver(BaseSolver):
-    """Assigns the craft capable of initializing tracking with minimum structural relocation metrics."""
+    """Assigns the craft that minimizes delay and relocation, strictly prioritizing sufficient passenger capacity."""
 
     def choose_action(self, state, env: AirlineEnv) -> int:
         f = env.flights[env.current_f_idx]
-        best_action, min_waste = 0, float("inf")
+        required_seats = float(f.get("pass", 1))
+
+        best_action = 0
+        min_waste = float("inf")
+
+        # Track a fallback plane in case NO aircraft has enough seats for this flight
+        fallback_action = 0
+        fallback_min_waste = float("inf")
 
         for idx, p_name in enumerate(env.planes):
             p_cfg = env.plane_configs[p_name]
@@ -221,10 +287,20 @@ class ClosestPlaneGreedySolver(BaseSolver):
             actual_start_possible = max(f["start"], env.times[idx] + (reloc_dist / (p_cfg["speed"] / 60)))
             total_waste_score = (actual_start_possible - f["start"]) + (reloc_dist / 100.0)
 
-            if total_waste_score < min_waste:
-                min_waste, best_action = total_waste_score, idx
+            # Check capacity constraint
+            if float(p_cfg["seats"]) >= required_seats:
+                # This plane is big enough! Optimize over these first.
+                if total_waste_score < min_waste:
+                    min_waste = total_waste_score
+                    best_action = idx
+            else:
+                # Fallback path if no planes are large enough
+                if total_waste_score < fallback_min_waste:
+                    fallback_min_waste = total_waste_score
+                    fallback_action = idx
 
-        return best_action
+        # If we found at least one plane that meets capacity, use it. Otherwise, use the best fallback.
+        return best_action if min_waste != float("inf") else fallback_action
 
 
 class DQNSolver(BaseSolver):
@@ -232,7 +308,12 @@ class DQNSolver(BaseSolver):
         self.agent = agent
 
     def choose_action(self, state, env: AirlineEnv | None = None) -> int:
-        return self.agent.choose_action(state, use_epsilon=False)
+        action_mask = env.get_action_mask() if env is not None else None
+        return self.agent.choose_action(
+            state,
+            action_mask=action_mask,
+            use_epsilon=False,
+        )
 
 
 class QLearningSolver(BaseSolver):
