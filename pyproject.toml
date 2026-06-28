@@ -9,6 +9,7 @@ dependencies = [
     "black>=26.1.0",
     "geopy>=2.4.1",
     "isort>=7.0.0",
+    "matplotlib>=3.11.0",
     "numpy>=2.4.2",
     "pandas>=3.0.0",
     "torch>=2.11.0",

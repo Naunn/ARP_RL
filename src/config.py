@@ -47,28 +47,32 @@ N_ITERATIONS: int = 1
 # --- STRUCTURAL CONFIGURATIONS ---
 MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
     "DQN": {
-        "lr": 0.0002,
+        "lr": 0.0005,
         "gamma": 0.99,
         "epsilon_decay": 0.9995,
         "init_epsilon": 0.8,
-        "min_epsilon": 0.02,
+        "min_epsilon": 0.1,
         "batch_size": 256,
         "tau": 0.001,
+        "use_attention": True,
+        "use_expert_bias": True,
     },
     "DOUBLE_DQN": {
-        "lr": 0.0002,
+        "lr": 0.0005,
         "gamma": 0.99,
         "epsilon_decay": 0.9995,
         "init_epsilon": 0.8,
-        "min_epsilon": 0.02,
+        "min_epsilon": 0.1,
         "batch_size": 256,
         "tau": 0.001,
+        "use_attention": True,
+        "use_expert_bias": True,
     },
 }
 
 MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
-    "DQN": {"n_episodes": 10000, "log_interval": 100},
-    "DOUBLE_DQN": {"n_episodes": 10000, "log_interval": 100},
+    "DQN": {"n_episodes": 1000, "log_interval": 10},
+    "DOUBLE_DQN": {"n_episodes": 1000, "log_interval": 10},
 }
 
 RL_TRAINING_CONFIG: Dict[str, float] = {
@@ -79,7 +83,7 @@ REWARD_CONFIG: Dict[str, Any] = {
     "train_use_clipping": True,
     "eval_use_clipping": True,
     "final_eval_use_clipping": True,
-    "penalty_per_min": 5,
+    "penalty_per_min": 50,
 }
 
 EARLY_STOPPING_CONFIG: Dict[str, Any] = {

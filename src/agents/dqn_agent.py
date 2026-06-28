@@ -9,8 +9,16 @@ import torch.optim as optim
 class AttentionPoolingQNetwork(nn.Module):
     """Deep Sets Q-Network with learned attention over the flight lookahead window."""
 
-    def __init__(self, fleet_dim, flight_feature_dim, hidden_dim=128, n_actions=3):
+    def __init__(
+        self,
+        fleet_dim,
+        flight_feature_dim,
+        hidden_dim=128,
+        n_actions=3,
+        use_attention=True,
+    ):
         super(AttentionPoolingQNetwork, self).__init__()
+        self.use_attention = bool(use_attention)
 
         # The 'Phi' network: Processes each individual flight's features independently
         self.flight_encoder = nn.Sequential(
@@ -48,11 +56,17 @@ class AttentionPoolingQNetwork(nn.Module):
 
         mask_fill_value = torch.finfo(encoded_flights.dtype).min
 
-        attention_logits = self.flight_attention(encoded_flights).squeeze(-1)
-        attention_logits = attention_logits.masked_fill(~valid_flights, mask_fill_value)
-        attention_weights = torch.softmax(attention_logits, dim=1)
-
-        attended_context = torch.sum(encoded_flights * attention_weights.unsqueeze(-1), dim=1)
+        if self.use_attention:
+            attention_logits = self.flight_attention(encoded_flights).squeeze(-1)
+            attention_logits = attention_logits.masked_fill(~valid_flights, mask_fill_value)
+            attention_weights = torch.softmax(attention_logits, dim=1)
+            attended_context = torch.sum(
+                encoded_flights * attention_weights.unsqueeze(-1),
+                dim=1,
+            )
+        else:
+            valid_counts = valid_flights.sum(dim=1, keepdim=True).clamp(min=1)
+            attended_context = encoded_flights.sum(dim=1) / valid_counts.to(encoded_flights.dtype)
 
         masked_encoded = encoded_flights.masked_fill(
             ~valid_flights.unsqueeze(-1),
@@ -182,6 +196,8 @@ class DQNAgent:
         batch_size=64,
         tau=0.005,
         hidden_dim=256,
+        use_attention=True,
+        use_expert_bias=True,
     ):
         self.fleet_dim = fleet_dim
         self.flight_feature_dim = flight_feature_dim
@@ -192,17 +208,26 @@ class DQNAgent:
         self.min_epsilon = min_epsilon
         self.batch_size = batch_size
         self.tau = tau
+        self.use_expert_bias = bool(use_expert_bias)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.use_amp = self.device.type == "cuda"
 
         # Main Network (used to pick actions and updated every step)
         self.policy_net = AttentionPoolingQNetwork(
-            fleet_dim, flight_feature_dim, hidden_dim=hidden_dim, n_actions=n_actions
+            fleet_dim,
+            flight_feature_dim,
+            hidden_dim=hidden_dim,
+            n_actions=n_actions,
+            use_attention=use_attention,
         ).to(self.device)
         # Target Network (held stable to compute steady bellman targets)
         self.target_net = AttentionPoolingQNetwork(
-            fleet_dim, flight_feature_dim, hidden_dim=hidden_dim, n_actions=n_actions
+            fleet_dim,
+            flight_feature_dim,
+            hidden_dim=hidden_dim,
+            n_actions=n_actions,
+            use_attention=use_attention,
         ).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
@@ -357,10 +382,13 @@ class DQNAgent:
                 target_q = rewards_t + (1 - dones_t) * self.gamma * max_next_q
 
             loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
-            imitation_weight = 0.1 * float(self.epsilon)
-            masked_logits = q_logits.masked_fill(~action_masks_t, float("-inf"))
-            imitation_loss = self.imitation_loss_fn(masked_logits, expert_actions_t)
-            total_loss = loss + (imitation_weight * imitation_loss)
+            if self.use_expert_bias:
+                imitation_weight = 0.1 * float(self.epsilon)
+                masked_logits = q_logits.masked_fill(~action_masks_t, float("-inf"))
+                imitation_loss = self.imitation_loss_fn(masked_logits, expert_actions_t)
+                total_loss = loss + (imitation_weight * imitation_loss)
+            else:
+                total_loss = loss
 
         # Optimize the Policy Network
         self._optimizer_step(total_loss)
@@ -425,10 +453,13 @@ class DoubleDQNAgent(DQNAgent):
                 target_q = rewards_t + (1 - dones_t) * self.gamma * next_target_q
 
             loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
-            imitation_weight = 0.1 * float(self.epsilon)
-            masked_logits = q_logits.masked_fill(~action_masks_t, float("-inf"))
-            imitation_loss = self.imitation_loss_fn(masked_logits, expert_actions_t)
-            total_loss = loss + (imitation_weight * imitation_loss)
+            if self.use_expert_bias:
+                imitation_weight = 0.1 * float(self.epsilon)
+                masked_logits = q_logits.masked_fill(~action_masks_t, float("-inf"))
+                imitation_loss = self.imitation_loss_fn(masked_logits, expert_actions_t)
+                total_loss = loss + (imitation_weight * imitation_loss)
+            else:
+                total_loss = loss
 
         self._optimizer_step(total_loss)
 

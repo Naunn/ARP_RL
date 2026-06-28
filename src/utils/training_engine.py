@@ -57,6 +57,8 @@ def initialize_dqn_agent(env, agent_cls, hyperparams) -> Any:
         batch_size=int(hyperparams["batch_size"]),
         tau=hyperparams["tau"],
         hidden_dim=int(hyperparams.get("hidden_dim", 256)),
+        use_attention=bool(hyperparams.get("use_attention", True)),
+        use_expert_bias=bool(hyperparams.get("use_expert_bias", False)),
     )
 
 
@@ -71,11 +73,11 @@ def train_dqn_episode(agent, env) -> float:
     """Executes a single continuous experience collection phase episode loop step."""
     state_tuple = env.get_vector_state(env.reset())
     action_mask = env.get_action_mask()
-    expert_solver = ClosestPlaneGreedySolver()
+    expert_solver = ClosestPlaneGreedySolver() if agent.use_expert_bias else None
     done, episode_reward, scale = False, 0.0, RL_TRAINING_CONFIG["dqn_reward_scale"]
 
     while not done:
-        expert_action = expert_solver.choose_action(state_tuple, env)
+        expert_action = expert_solver.choose_action(state_tuple, env) if expert_solver is not None else -1
         action = agent.choose_action(
             state_tuple,
             action_mask=action_mask,
