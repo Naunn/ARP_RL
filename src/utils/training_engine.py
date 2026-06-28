@@ -59,6 +59,7 @@ def initialize_dqn_agent(env, agent_cls, hyperparams) -> Any:
         hidden_dim=int(hyperparams.get("hidden_dim", 256)),
         use_attention=bool(hyperparams.get("use_attention", True)),
         use_expert_bias=bool(hyperparams.get("use_expert_bias", False)),
+        use_action_masking=bool(hyperparams.get("use_action_masking", True)),
     )
 
 
@@ -72,7 +73,7 @@ def reset_agent_exploration(agent, n_episodes: int, hyperparams: dict):
 def train_dqn_episode(agent, env) -> float:
     """Executes a single continuous experience collection phase episode loop step."""
     state_tuple = env.get_vector_state(env.reset())
-    action_mask = env.get_action_mask()
+    action_mask = env.get_action_mask() if agent.use_action_masking else None
     expert_solver = ClosestPlaneGreedySolver() if agent.use_expert_bias else None
     done, episode_reward, scale = False, 0.0, RL_TRAINING_CONFIG["dqn_reward_scale"]
 
@@ -85,7 +86,7 @@ def train_dqn_episode(agent, env) -> float:
         )
         next_raw_state, reward, done, _ = env.step(action)
         next_state_tuple = env.get_vector_state(next_raw_state)
-        next_action_mask = env.get_action_mask(next_raw_state)
+        next_action_mask = env.get_action_mask(next_raw_state) if agent.use_action_masking else None
 
         agent.store_transition(
             *state_tuple,
@@ -114,12 +115,13 @@ def train_dqn_iteration(
     iteration: int,
     early_stopping: bool = True,
     model_name: str = "DQN",
+    training_name: str | None = None,
 ) -> list[float]:
     """Runs a complete generational training lifecycle iteration containing n_episodes."""
     scores = []
     start_time = time.time()
     log_interval: int = MODEL_TRAINING_PARAMS[model_name]["log_interval"]
-    logger.info(f"[{model_name}] Starting execution loop ({n_episodes} eps)")
+    logger.info(f"[{model_name}] (Training mode: {training_name}) Starting execution loop ({n_episodes} eps)")
 
     best_rolling_profit = float("-inf")
     patience_counter = 0
@@ -160,6 +162,7 @@ def train_dqn_iteration(
                 avg_score,
                 eta_str,
                 model_name=model_name,
+                training_name=training_name,
             )
 
     return scores

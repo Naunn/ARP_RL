@@ -72,12 +72,31 @@ def evaluate_agent_performance(env, solver, name: str) -> tuple[float, float]:
 
 def print_results_table(results: dict, name: str):
     """Prints a beautiful, aligned evaluation matrix."""
-    logger.info("\n" + "=" * 70)
-    logger.info(f"{'STRATEGY':<20} | {f'{name} PROFIT':>16} | {f'{name} TEST DELAY':>14}")
-    logger.info("-" * 70)
-    for name, (profit, delay) in results.items():
-        logger.info(f"{name:<20} | ${profit:>14,.0f} | {delay:>12,.0f}m")
-    logger.info("=" * 70 + "\n")
+    # Define exact column widths so they are easy to change
+    w1, w2, w3 = 26, 21, 21
+
+    # Create the headers first so we can calculate the exact separator line length
+    header_strategy = "STRATEGY"
+    header_profit = f"{name} PROFIT"
+    header_delay = f"{name} DELAY"
+
+    # Format the header row
+    header_row = f"{header_strategy:<{w1}} | {header_profit:>{w2}} | {header_delay:>{w3}}"
+    line_length = len(header_row)
+
+    # Print the table
+    logger.info("\n" + "=" * line_length)
+    logger.info(header_row)
+    logger.info("-" * line_length)
+
+    for strat_name, (profit, delay) in results.items():
+        # Format the values as strings first so the symbols ($ and m) don't break the alignment
+        formatted_profit = f"${profit:,.0f}"
+        formatted_delay = f"{delay:,.0f}m"
+
+        logger.info(f"{strat_name:<{w1}} | {formatted_profit:>{w2}} | {formatted_delay:>{w3}}")
+
+    logger.info("=" * line_length + "\n")
 
 
 TRAINING_DATA_DIR = PROJECT_ROOT / "data" / "training"
@@ -88,15 +107,19 @@ aircraft_df = pd.read_csv(TRAINING_DATA_DIR / "aircraft.csv").drop_duplicates(
 )
 
 FLIGHTS = build_flight_pool(flights_df, itineraries_df)
-N = 30
-C_N = 5
-P_N = 3
+N = 15
+C_N = 3
+P_N = 2
 trap = True
 if trap:
     SAMP_FLIGHTS = pd.DataFrame(
         generate_trap_schedule(
             n=N,
-            cities=list(np.random.choice(flights_df.origin.unique(), C_N)),
+            cities=[
+                "AMS",
+                "LGW",
+                "BOD",
+            ],  # list(np.random.choice(flights_df.origin.unique(), C_N)),
             start_time_range=(flights_df.start_min.min(), flights_df.arrival_min.max()),
             pass_range=(
                 itineraries_df.total_passenger_count.min(),
@@ -108,7 +131,11 @@ else:
     SAMP_FLIGHTS = pd.DataFrame(
         generate_random_flights(
             n=N,
-            cities=list(np.random.choice(flights_df.origin.unique(), C_N)),
+            cities=[
+                "AMS",
+                "LGW",
+                "BOD",
+            ],  # list(np.random.choice(flights_df.origin.unique(), C_N)),
             start_time_range=(flights_df.start_min.min(), flights_df.arrival_min.max()),
             pass_range=(
                 itineraries_df.total_passenger_count.min(),
@@ -125,6 +152,7 @@ SAMP_FLIGHTS["total_ticket_price"] = SAMP_FLIGHTS["pass"] * np.average(
 FLIGHTS = SAMP_FLIGHTS.to_dict("records")
 
 PLANES = build_planes(aircraft_df.sample(P_N))
+PLANES = build_planes(aircraft_df[aircraft_df.aircraft_id.isin(["A319#6", "ERJ145#4"])])
 
 AIRPORTS = sorted(
     {f["origin"] for f in FLIGHTS} | {f["dest"] for f in FLIGHTS} | {p["initial_airport"] for p in PLANES.values()}
@@ -150,13 +178,28 @@ double_dqn_agent = initialize_dqn_agent(dummy_env, DoubleDQNAgent, MODEL_HYPERPA
 dqn_agent_idle_config = copy.deepcopy(MODEL_HYPERPARAMS["DQN"])
 dqn_agent_idle_config["use_attention"] = False
 dqn_agent_idle_config["use_expert_bias"] = False
+dqn_agent_idle_config["use_action_masking"] = False
+# dqn_agent_idle_config["init_epsilon"] = 0.8
 
 double_dqn_agent_idle_config = copy.deepcopy(MODEL_HYPERPARAMS["DOUBLE_DQN"])
 double_dqn_agent_idle_config["use_attention"] = False
 double_dqn_agent_idle_config["use_expert_bias"] = False
+double_dqn_agent_idle_config["use_action_masking"] = False
+# double_dqn_agent_idle_config["init_epsilon"] = 0.8
 
 dqn_agent_idle = initialize_dqn_agent(dummy_env, DQNAgent, dqn_agent_idle_config)
 double_dqn_agent_idle = initialize_dqn_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_idle_config)
+
+dqn_agent_no_bias_config = copy.deepcopy(MODEL_HYPERPARAMS["DQN"])
+dqn_agent_no_bias_config["use_expert_bias"] = False
+dqn_agent_no_bias_config["use_action_masking"] = False
+
+double_dqn_agent_no_bias_config = copy.deepcopy(MODEL_HYPERPARAMS["DOUBLE_DQN"])
+double_dqn_agent_no_bias_config["use_expert_bias"] = False
+double_dqn_agent_no_bias_config["use_action_masking"] = False
+
+dqn_agent_no_bias = initialize_dqn_agent(dummy_env, DQNAgent, dqn_agent_no_bias_config)
+double_dqn_agent_no_bias = initialize_dqn_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_no_bias_config)
 
 meta_dims = (len(FLIGHTS), len(AIRPORTS), len(PLANES))
 
@@ -165,6 +208,8 @@ dqn_agent_scores = []
 double_dqn_agent_scores = []
 dqn_agent_idle_scores = []
 double_dqn_agent_idle_scores = []
+dqn_agent_no_bias_scores = []
+double_dqn_agent_no_bias_scores = []
 
 for iteration in range(1, N_ITERATIONS + 1):
     log_iteration_start(iteration, N_ITERATIONS)
@@ -176,6 +221,8 @@ for iteration in range(1, N_ITERATIONS + 1):
     reset_agent_exploration(double_dqn_agent, ddqn_eps, MODEL_HYPERPARAMS["DOUBLE_DQN"])
     reset_agent_exploration(dqn_agent_idle, dqn_eps, dqn_agent_idle_config)
     reset_agent_exploration(double_dqn_agent_idle, ddqn_eps, double_dqn_agent_idle_config)
+    reset_agent_exploration(dqn_agent_no_bias, dqn_eps, dqn_agent_no_bias_config)
+    reset_agent_exploration(double_dqn_agent_no_bias, ddqn_eps, double_dqn_agent_no_bias_config)
 
     dqn_env = AirlineEnv(
         FLIGHTS,
@@ -202,7 +249,14 @@ for iteration in range(1, N_ITERATIONS + 1):
         use_clipping=REWARD_CONFIG["eval_use_clipping"],
     )
 
-    dqn_agent_idle_scores = train_dqn_iteration(dqn_agent_idle, dqn_env, dqn_eps, iteration, model_name="DQN")
+    dqn_agent_idle_scores = train_dqn_iteration(
+        dqn_agent_idle,
+        dqn_env,
+        dqn_eps,
+        iteration,
+        model_name="DQN",
+        training_name="idle",
+    )
     logger.info(f"--- dqn_agent_idle_scores: {dqn_agent_idle_scores} ---")
     double_dqn_agent_idle_scores = train_dqn_iteration(
         double_dqn_agent_idle,
@@ -210,12 +264,43 @@ for iteration in range(1, N_ITERATIONS + 1):
         ddqn_eps,
         iteration,
         model_name="DOUBLE_DQN",
+        training_name="idle",
     )
-    logger.info(f"--- double_dqn_agent_idle_scores: {double_dqn_agent_idle_scores} ---")
-    dqn_agent_scores = train_dqn_iteration(dqn_agent, dqn_env, dqn_eps, iteration, model_name="DQN")
+    logger.info(f"--- double_dqn_agent_no_bias_scores: {double_dqn_agent_no_bias_scores} ---")
+    dqn_agent_no_bias_scores = train_dqn_iteration(
+        dqn_agent_no_bias,
+        dqn_env,
+        dqn_eps,
+        iteration,
+        model_name="DQN",
+        training_name="no_bias",
+    )
+    logger.info(f"--- dqn_agent_no_bias_scores: {dqn_agent_no_bias_scores} ---")
+    double_dqn_agent_no_bias_scores = train_dqn_iteration(
+        double_dqn_agent_no_bias,
+        ddqn_env,
+        ddqn_eps,
+        iteration,
+        model_name="DOUBLE_DQN",
+        training_name="no_bias",
+    )
+    logger.info(f"--- double_dqn_agent_no_bias_scores: {double_dqn_agent_no_bias_scores} ---")
+    dqn_agent_scores = train_dqn_iteration(
+        dqn_agent,
+        dqn_env,
+        dqn_eps,
+        iteration,
+        model_name="DQN",
+        training_name="full",
+    )
     logger.info(f"--- dqn_agent_scores: {dqn_agent_scores} ---")
     double_dqn_agent_scores = train_dqn_iteration(
-        double_dqn_agent, ddqn_env, ddqn_eps, iteration, model_name="DOUBLE_DQN"
+        double_dqn_agent,
+        ddqn_env,
+        ddqn_eps,
+        iteration,
+        model_name="DOUBLE_DQN",
+        training_name="full",
     )
     logger.info(f"--- double_dqn_agent_scores: {double_dqn_agent_scores} ---")
 
@@ -223,19 +308,25 @@ for iteration in range(1, N_ITERATIONS + 1):
     p2 = get_model_filename(iteration, *meta_dims, ddqn_eps, "DOUBLE_DQN")
     p1_idle = get_model_filename(iteration, *meta_dims, dqn_eps, "DQN_idle")
     p2_idle = get_model_filename(iteration, *meta_dims, ddqn_eps, "DOUBLE_DQN_idle")
+    p1_no_bias = get_model_filename(iteration, *meta_dims, dqn_eps, "DQN_no_bias")
+    p2_no_bias = get_model_filename(iteration, *meta_dims, ddqn_eps, "DOUBLE_DQN_no_bias")
     torch.save(dqn_agent.policy_net.state_dict(), p1)
     torch.save(double_dqn_agent.policy_net.state_dict(), p2)
     torch.save(dqn_agent_idle.policy_net.state_dict(), p1_idle)
     torch.save(double_dqn_agent_idle.policy_net.state_dict(), p2_idle)
+    torch.save(dqn_agent_no_bias.policy_net.state_dict(), p1_no_bias)
+    torch.save(double_dqn_agent_no_bias.policy_net.state_dict(), p2_no_bias)
 
     logger.info(f"--- Iteration {iteration} Mid-Train Summary ---")
     mid_solvers = {
         "Random Baseline": RandomSolver(),
         "Greedy Baseline": ClosestPlaneGreedySolver(),
-        "DQN Agent": DQNSolver(dqn_agent),
-        "Double DQN Agent": DQNSolver(double_dqn_agent),
         "DQN Agent (idle)": DQNSolver(dqn_agent_idle),
         "Double DQN Agent (idle)": DQNSolver(double_dqn_agent_idle),
+        "DQN Agent (no_bias)": DQNSolver(dqn_agent_no_bias),
+        "Double DQN Agent (no_bias)": DQNSolver(double_dqn_agent_no_bias),
+        "DQN Agent": DQNSolver(dqn_agent),
+        "Double DQN Agent": DQNSolver(double_dqn_agent),
     }
     mid_results = {name: evaluate_agent_performance(eval_env, solver, name) for name, solver in mid_solvers.items()}
     print_results_table(mid_results, f"EVAL {iteration}")
@@ -256,22 +347,26 @@ final_env = AirlineEnv(
 final_solvers = {
     "Random Baseline": RandomSolver(),
     "Greedy Baseline": ClosestPlaneGreedySolver(),
-    "Trained DQN Agent (idle)": DQNSolver(dqn_agent_idle),
-    "Trained Double DQN Agent (idle)": DQNSolver(double_dqn_agent_idle),
-    "Trained DQN": DQNSolver(dqn_agent),
-    "Trained Double DQN": DQNSolver(double_dqn_agent),
+    "DQN Agent (idle)": DQNSolver(dqn_agent_idle),
+    "Double DQN Agent (idle)": DQNSolver(double_dqn_agent_idle),
+    "DQN Agent (no_bias)": DQNSolver(dqn_agent_no_bias),
+    "Double DQN Agent (no_bias)": DQNSolver(double_dqn_agent_no_bias),
+    "DQN (full)": DQNSolver(dqn_agent),
+    "Double DQN (full)": DQNSolver(double_dqn_agent),
 }
 
 final_results = {name: evaluate_agent_performance(final_env, solver, name) for name, solver in final_solvers.items()}
-print_results_table(final_results, "TRAIN FINAL")
+print_results_table(final_results, "TRAINED FINAL")
 
 fig, ax = plt.subplots(figsize=(10, 5))
 
 models = {
-    "DQN (Attention)": (dqn_agent_scores, "#1f77b4"),
-    "Double DQN (Attention)": (double_dqn_agent_scores, "#ff7f0e"),
+    "DQN (full)": (dqn_agent_scores, "#1f77b4"),
+    "Double DQN (full)": (double_dqn_agent_scores, "#ff7f0e"),
     "DQN (Idle)": (dqn_agent_idle_scores, "#a6cee3"),
     "Double DQN (Idle)": (double_dqn_agent_idle_scores, "#fdbf6f"),
+    "DQN (no_bias)": (dqn_agent_no_bias_scores, "#a6cee3"),
+    "Double DQN (no_bias)": (double_dqn_agent_no_bias_scores, "#fdbf6f"),
 }
 
 for name, (scores, color) in models.items():
@@ -328,16 +423,18 @@ disrupted_env = AirlineEnv(
 )
 
 disrupted_solvers = {
-    "Random Baseline (Disrupted)": RandomSolver(),
-    "Greedy Baseline (Disrupted)": ClosestPlaneGreedySolver(),
-    "Trained DQN (Idle - Disrupted)": DQNSolver(dqn_agent_idle),
-    "Trained Double DQN (Idle - Disrupted)": DQNSolver(double_dqn_agent_idle),
-    "Trained DQN (Disrupted)": DQNSolver(dqn_agent),
-    "Trained Double DQN (Disrupted)": DQNSolver(double_dqn_agent),
+    "Random Baseline": RandomSolver(),
+    "Greedy Baseline": ClosestPlaneGreedySolver(),
+    "DQN (Idle)": DQNSolver(dqn_agent_idle),
+    "Double DQN (Idle)": DQNSolver(double_dqn_agent_idle),
+    "DQN (no_bias)": DQNSolver(dqn_agent_no_bias),
+    "Double DQN (no_bias)": DQNSolver(double_dqn_agent_no_bias),
+    "DQN (full)": DQNSolver(dqn_agent),
+    "Double DQN (full)": DQNSolver(double_dqn_agent),
 }
 
 logger.info("Executing Robustness Evaluation Matrix...")
 disrupted_results = {
     name: evaluate_agent_performance(disrupted_env, solver, name) for name, solver in disrupted_solvers.items()
 }
-print_results_table(disrupted_results, "TEST")
+print_results_table(disrupted_results, "DISRUPTED TEST")

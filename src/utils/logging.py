@@ -48,9 +48,10 @@ def log_progress(
     avg_score: float,
     eta_str: str,
     model_name: str = "MODEL",
+    training_name: str | None = None,
 ):
     logger.info(
-        f"[{model_name}] [Iter {iteration}] Progress: {progress_pct:>5.1f}% | "
+        f"[{model_name}] (Training mode: {training_name}) [Iter {iteration}] Progress: {progress_pct:>5.1f}% | "
         f"Epsilon: {epsilon:.4f} | Avg Profit: ${avg_score:>10.0f} | ETA: {eta_str}"
     )
 
