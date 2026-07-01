@@ -3,8 +3,7 @@
 import copy
 import sys
 from pathlib import Path
-
-import matplotlib.pyplot as plt
+from typing import Any, Callable, Dict, List, cast
 
 # --- DATA ENTRY ---
 import numpy as np
@@ -56,7 +55,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 # --- STREAMLINED INLINE EVALUATION UTILITY ---
-def evaluate_agent_performance(env, solver, name: str) -> tuple[float, float]:
+def evaluate_agent_performance(env, solver, name: str, verbose: bool = True) -> tuple[float, float]:
     """Runs a single evaluation pass of a solver using the system's execution utility."""
     if hasattr(solver, "agent") and hasattr(solver.agent, "policy_net"):
         solver.agent.policy_net.eval()
@@ -66,6 +65,7 @@ def evaluate_agent_performance(env, solver, name: str) -> tuple[float, float]:
         solver=solver,
         flights=env.flights,
         solver_name=name,
+        verbose=verbose,
     )
     return profit, delay
 
@@ -110,7 +110,7 @@ FLIGHTS = build_flight_pool(flights_df, itineraries_df)
 N = 15
 C_N = 3
 P_N = 2
-trap = True
+trap = False
 if trap:
     SAMP_FLIGHTS = pd.DataFrame(
         generate_trap_schedule(
@@ -202,239 +202,334 @@ dqn_agent_no_bias = initialize_dqn_agent(dummy_env, DQNAgent, dqn_agent_no_bias_
 double_dqn_agent_no_bias = initialize_dqn_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_no_bias_config)
 
 meta_dims = (len(FLIGHTS), len(AIRPORTS), len(PLANES))
+FLIGHTS_INITIAL = cast(List[Dict[str, Any]], copy.deepcopy(FLIGHTS))
+dg = DisruptionGenerator(AIRPORTS, dist_dict)
 
-# --- THE TRAINING LOOP ---
-dqn_agent_scores = []
-double_dqn_agent_scores = []
-dqn_agent_idle_scores = []
-double_dqn_agent_idle_scores = []
-dqn_agent_no_bias_scores = []
-double_dqn_agent_no_bias_scores = []
 
-for iteration in range(1, N_ITERATIONS + 1):
-    log_iteration_start(iteration, N_ITERATIONS)
+def build_disruption_actions() -> List[Dict[str, Any]]:
+    return [
+        {
+            "action": "add_delay",
+            "target": "random",
+            "count": max(1, N // 3),
+            "min_delay": 60,
+            "max_delay": 180,
+        },
+        {
+            "action": "replace_airport",
+            "target": "random",
+            "field": "origin",
+            "method": "closest",
+        },
+    ]
 
-    dqn_eps: int = MODEL_TRAINING_PARAMS["DQN"]["n_episodes"]
-    ddqn_eps: int = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["n_episodes"]
 
-    reset_agent_exploration(dqn_agent, dqn_eps, MODEL_HYPERPARAMS["DQN"])
-    reset_agent_exploration(double_dqn_agent, ddqn_eps, MODEL_HYPERPARAMS["DOUBLE_DQN"])
-    reset_agent_exploration(dqn_agent_idle, dqn_eps, dqn_agent_idle_config)
-    reset_agent_exploration(double_dqn_agent_idle, ddqn_eps, double_dqn_agent_idle_config)
-    reset_agent_exploration(dqn_agent_no_bias, dqn_eps, dqn_agent_no_bias_config)
-    reset_agent_exploration(double_dqn_agent_no_bias, ddqn_eps, double_dqn_agent_no_bias_config)
+def train_agents_on_schedule(
+    schedule_flights: List[Dict[str, Any]],
+    n_iterations: int,
+    phase_name: str,
+    per_iteration_schedule_fn: Callable[[int], List[Dict[str, Any]]] | None = None,
+    verbose: bool = True,
+) -> dict[str, list[float]]:
+    dqn_agent_scores: list[float] = []
+    double_dqn_agent_scores: list[float] = []
+    dqn_agent_idle_scores: list[float] = []
+    double_dqn_agent_idle_scores: list[float] = []
+    dqn_agent_no_bias_scores: list[float] = []
+    double_dqn_agent_no_bias_scores: list[float] = []
 
-    dqn_env = AirlineEnv(
-        FLIGHTS,
-        PLANES,
-        dist_dict,
-        AIRPORTS,
-        penalty,
-        use_clipping=REWARD_CONFIG["train_use_clipping"],
-    )
-    ddqn_env = AirlineEnv(
-        FLIGHTS,
-        PLANES,
-        dist_dict,
-        AIRPORTS,
-        penalty,
-        use_clipping=REWARD_CONFIG["train_use_clipping"],
-    )
-    eval_env = AirlineEnv(
-        FLIGHTS,
-        PLANES,
-        dist_dict,
-        AIRPORTS,
-        penalty,
-        use_clipping=REWARD_CONFIG["eval_use_clipping"],
-    )
+    for iteration in range(1, n_iterations + 1):
+        log_iteration_start(iteration, n_iterations)
+        logger.info(f"[{phase_name}] Schedule training iteration {iteration}/{n_iterations}")
 
-    dqn_agent_idle_scores = train_dqn_iteration(
-        dqn_agent_idle,
-        dqn_env,
-        dqn_eps,
-        iteration,
-        model_name="DQN",
-        training_name="idle",
-    )
-    logger.info(f"--- dqn_agent_idle_scores: {dqn_agent_idle_scores} ---")
-    double_dqn_agent_idle_scores = train_dqn_iteration(
-        double_dqn_agent_idle,
-        ddqn_env,
-        ddqn_eps,
-        iteration,
-        model_name="DOUBLE_DQN",
-        training_name="idle",
-    )
-    logger.info(f"--- double_dqn_agent_no_bias_scores: {double_dqn_agent_no_bias_scores} ---")
-    dqn_agent_no_bias_scores = train_dqn_iteration(
-        dqn_agent_no_bias,
-        dqn_env,
-        dqn_eps,
-        iteration,
-        model_name="DQN",
-        training_name="no_bias",
-    )
-    logger.info(f"--- dqn_agent_no_bias_scores: {dqn_agent_no_bias_scores} ---")
-    double_dqn_agent_no_bias_scores = train_dqn_iteration(
-        double_dqn_agent_no_bias,
-        ddqn_env,
-        ddqn_eps,
-        iteration,
-        model_name="DOUBLE_DQN",
-        training_name="no_bias",
-    )
-    logger.info(f"--- double_dqn_agent_no_bias_scores: {double_dqn_agent_no_bias_scores} ---")
-    dqn_agent_scores = train_dqn_iteration(
-        dqn_agent,
-        dqn_env,
-        dqn_eps,
-        iteration,
-        model_name="DQN",
-        training_name="full",
-    )
-    logger.info(f"--- dqn_agent_scores: {dqn_agent_scores} ---")
-    double_dqn_agent_scores = train_dqn_iteration(
-        double_dqn_agent,
-        ddqn_env,
-        ddqn_eps,
-        iteration,
-        model_name="DOUBLE_DQN",
-        training_name="full",
-    )
-    logger.info(f"--- double_dqn_agent_scores: {double_dqn_agent_scores} ---")
+        current_schedule = per_iteration_schedule_fn(iteration) if per_iteration_schedule_fn else schedule_flights
 
-    p1 = get_model_filename(iteration, *meta_dims, dqn_eps, "DQN")
-    p2 = get_model_filename(iteration, *meta_dims, ddqn_eps, "DOUBLE_DQN")
-    p1_idle = get_model_filename(iteration, *meta_dims, dqn_eps, "DQN_idle")
-    p2_idle = get_model_filename(iteration, *meta_dims, ddqn_eps, "DOUBLE_DQN_idle")
-    p1_no_bias = get_model_filename(iteration, *meta_dims, dqn_eps, "DQN_no_bias")
-    p2_no_bias = get_model_filename(iteration, *meta_dims, ddqn_eps, "DOUBLE_DQN_no_bias")
-    torch.save(dqn_agent.policy_net.state_dict(), p1)
-    torch.save(double_dqn_agent.policy_net.state_dict(), p2)
-    torch.save(dqn_agent_idle.policy_net.state_dict(), p1_idle)
-    torch.save(double_dqn_agent_idle.policy_net.state_dict(), p2_idle)
-    torch.save(dqn_agent_no_bias.policy_net.state_dict(), p1_no_bias)
-    torch.save(double_dqn_agent_no_bias.policy_net.state_dict(), p2_no_bias)
+        dqn_eps: int = MODEL_TRAINING_PARAMS["DQN"]["n_episodes"]
+        ddqn_eps: int = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["n_episodes"]
 
-    logger.info(f"--- Iteration {iteration} Mid-Train Summary ---")
-    mid_solvers = {
+        reset_agent_exploration(dqn_agent, dqn_eps, MODEL_HYPERPARAMS["DQN"])
+        reset_agent_exploration(double_dqn_agent, ddqn_eps, MODEL_HYPERPARAMS["DOUBLE_DQN"])
+        reset_agent_exploration(dqn_agent_idle, dqn_eps, dqn_agent_idle_config)
+        reset_agent_exploration(double_dqn_agent_idle, ddqn_eps, double_dqn_agent_idle_config)
+        reset_agent_exploration(dqn_agent_no_bias, dqn_eps, dqn_agent_no_bias_config)
+        reset_agent_exploration(double_dqn_agent_no_bias, ddqn_eps, double_dqn_agent_no_bias_config)
+
+        dqn_env = AirlineEnv(
+            current_schedule,
+            PLANES,
+            dist_dict,
+            AIRPORTS,
+            penalty,
+            use_clipping=REWARD_CONFIG["train_use_clipping"],
+        )
+        ddqn_env = AirlineEnv(
+            current_schedule,
+            PLANES,
+            dist_dict,
+            AIRPORTS,
+            penalty,
+            use_clipping=REWARD_CONFIG["train_use_clipping"],
+        )
+        # eval_env = AirlineEnv(
+        #     current_schedule,
+        #     PLANES,
+        #     dist_dict,
+        #     AIRPORTS,
+        #     penalty,
+        #     use_clipping=REWARD_CONFIG["eval_use_clipping"],
+        # )
+
+        dqn_agent_idle_scores = train_dqn_iteration(
+            dqn_agent_idle,
+            dqn_env,
+            dqn_eps,
+            iteration,
+            model_name="DQN",
+            training_name=f"{phase_name}_idle",
+            verbose=verbose,
+        )
+        # logger.info(
+        #     f"--- dqn_agent_idle_scores ({phase_name}): {dqn_agent_idle_scores} ---"
+        # )
+        double_dqn_agent_idle_scores = train_dqn_iteration(
+            double_dqn_agent_idle,
+            ddqn_env,
+            ddqn_eps,
+            iteration,
+            model_name="DOUBLE_DQN",
+            training_name=f"{phase_name}_idle",
+            verbose=verbose,
+        )
+        # logger.info(
+        #     f"--- double_dqn_agent_idle_scores ({phase_name}): {double_dqn_agent_idle_scores} ---"
+        # )
+        dqn_agent_no_bias_scores = train_dqn_iteration(
+            dqn_agent_no_bias,
+            dqn_env,
+            dqn_eps,
+            iteration,
+            model_name="DQN",
+            training_name=f"{phase_name}_no_bias",
+            verbose=verbose,
+        )
+        # logger.info(
+        #     f"--- dqn_agent_no_bias_scores ({phase_name}): {dqn_agent_no_bias_scores} ---"
+        # )
+        double_dqn_agent_no_bias_scores = train_dqn_iteration(
+            double_dqn_agent_no_bias,
+            ddqn_env,
+            ddqn_eps,
+            iteration,
+            model_name="DOUBLE_DQN",
+            training_name=f"{phase_name}_no_bias",
+            verbose=verbose,
+        )
+        # logger.info(
+        #     f"--- double_dqn_agent_no_bias_scores ({phase_name}): {double_dqn_agent_no_bias_scores} ---"
+        # )
+        dqn_agent_scores = train_dqn_iteration(
+            dqn_agent,
+            dqn_env,
+            dqn_eps,
+            iteration,
+            model_name="DQN",
+            training_name=f"{phase_name}_full",
+            verbose=verbose,
+        )
+        # logger.info(f"--- dqn_agent_scores ({phase_name}): {dqn_agent_scores} ---")
+        double_dqn_agent_scores = train_dqn_iteration(
+            double_dqn_agent,
+            ddqn_env,
+            ddqn_eps,
+            iteration,
+            model_name="DOUBLE_DQN",
+            training_name=f"{phase_name}_full",
+            verbose=verbose,
+        )
+        # logger.info(
+        #     f"--- double_dqn_agent_scores ({phase_name}): {double_dqn_agent_scores} ---"
+        # )
+
+        p1 = get_model_filename(iteration, *meta_dims, dqn_eps, f"DQN_{phase_name}")
+        p2 = get_model_filename(iteration, *meta_dims, ddqn_eps, f"DOUBLE_DQN_{phase_name}")
+        p1_idle = get_model_filename(iteration, *meta_dims, dqn_eps, f"DQN_{phase_name}_idle")
+        p2_idle = get_model_filename(iteration, *meta_dims, ddqn_eps, f"DOUBLE_DQN_{phase_name}_idle")
+        p1_no_bias = get_model_filename(iteration, *meta_dims, dqn_eps, f"DQN_{phase_name}_no_bias")
+        p2_no_bias = get_model_filename(
+            iteration,
+            *meta_dims,
+            ddqn_eps,
+            f"DOUBLE_DQN_{phase_name}_no_bias",
+        )
+        torch.save(dqn_agent.policy_net.state_dict(), p1)
+        torch.save(double_dqn_agent.policy_net.state_dict(), p2)
+        torch.save(dqn_agent_idle.policy_net.state_dict(), p1_idle)
+        torch.save(double_dqn_agent_idle.policy_net.state_dict(), p2_idle)
+        torch.save(dqn_agent_no_bias.policy_net.state_dict(), p1_no_bias)
+        torch.save(double_dqn_agent_no_bias.policy_net.state_dict(), p2_no_bias)
+
+        # mid_solvers = {
+        #     "Random Baseline": RandomSolver(),
+        #     "Greedy Baseline": ClosestPlaneGreedySolver(),
+        #     "DQN Agent (idle)": DQNSolver(dqn_agent_idle),
+        #     "Double DQN Agent (idle)": DQNSolver(double_dqn_agent_idle),
+        #     "DQN Agent (no_bias)": DQNSolver(dqn_agent_no_bias),
+        #     "Double DQN Agent (no_bias)": DQNSolver(double_dqn_agent_no_bias),
+        #     "DQN Agent": DQNSolver(dqn_agent),
+        #     "Double DQN Agent": DQNSolver(double_dqn_agent),
+        # }
+        # mid_results = {
+        #     name: evaluate_agent_performance(eval_env, solver, name)
+        #     for name, solver in mid_solvers.items()
+        # }
+        # print_results_table(mid_results, f"{phase_name.upper()} EVAL {iteration}")
+
+    logger.info(f"[{phase_name}] Training cycle finished across all iterations.")
+    return {
+        "dqn_full": dqn_agent_scores,
+        "double_dqn_full": double_dqn_agent_scores,
+        "dqn_idle": dqn_agent_idle_scores,
+        "double_dqn_idle": double_dqn_agent_idle_scores,
+        "dqn_no_bias": dqn_agent_no_bias_scores,
+        "double_dqn_no_bias": double_dqn_agent_no_bias_scores,
+    }
+
+
+def build_current_solvers() -> Dict[str, Any]:
+    return {
         "Random Baseline": RandomSolver(),
         "Greedy Baseline": ClosestPlaneGreedySolver(),
         "DQN Agent (idle)": DQNSolver(dqn_agent_idle),
         "Double DQN Agent (idle)": DQNSolver(double_dqn_agent_idle),
         "DQN Agent (no_bias)": DQNSolver(dqn_agent_no_bias),
         "Double DQN Agent (no_bias)": DQNSolver(double_dqn_agent_no_bias),
-        "DQN Agent": DQNSolver(dqn_agent),
-        "Double DQN Agent": DQNSolver(double_dqn_agent),
+        "DQN (full)": DQNSolver(dqn_agent),
+        "Double DQN (full)": DQNSolver(double_dqn_agent),
     }
-    mid_results = {name: evaluate_agent_performance(eval_env, solver, name) for name, solver in mid_solvers.items()}
-    print_results_table(mid_results, f"EVAL {iteration}")
 
-logger.info("Global training cycle finished across all iterations.")
 
-# --- FINAL TRAIN EVALUATION ---
-logger.info("\nExecuting Final Test Evaluation Validation Stage...")
-final_env = AirlineEnv(
-    FLIGHTS,
-    PLANES,
-    dist_dict,
-    AIRPORTS,
-    penalty,
-    use_clipping=REWARD_CONFIG["final_eval_use_clipping"],
+def evaluate_models_on_schedule(schedule_flights: List[Dict[str, Any]], eval_label: str, show_schedule: bool = True):
+    eval_env = AirlineEnv(
+        schedule_flights,
+        PLANES,
+        dist_dict,
+        AIRPORTS,
+        penalty,
+        use_clipping=REWARD_CONFIG["final_eval_use_clipping"],
+    )
+    results = {
+        name: evaluate_agent_performance(eval_env, solver, name, show_schedule)
+        for name, solver in build_current_solvers().items()
+    }
+    print_results_table(results, eval_label)
+    return results
+
+
+logger.info("\nPhase 1/3: Training on initial schedule...")
+initial_scores = train_agents_on_schedule(
+    FLIGHTS_INITIAL,
+    N_ITERATIONS,
+    "initial",
 )
+evaluate_models_on_schedule(FLIGHTS_INITIAL, "POST INITIAL TRAIN", False)
 
-final_solvers = {
-    "Random Baseline": RandomSolver(),
-    "Greedy Baseline": ClosestPlaneGreedySolver(),
-    "DQN Agent (idle)": DQNSolver(dqn_agent_idle),
-    "Double DQN Agent (idle)": DQNSolver(double_dqn_agent_idle),
-    "DQN Agent (no_bias)": DQNSolver(dqn_agent_no_bias),
-    "Double DQN Agent (no_bias)": DQNSolver(double_dqn_agent_no_bias),
-    "DQN (full)": DQNSolver(dqn_agent),
-    "Double DQN (full)": DQNSolver(double_dqn_agent),
+# --- DISRUPTED SCHEDULE RETRAINING ---
+logger.info("\nPhase 2/3: Iterative disruption cycle (generate -> evaluate -> retrain)...")
+
+disrupted_scores: dict[str, list[float]] = {
+    "dqn_full": [],
+    "double_dqn_full": [],
+    "dqn_idle": [],
+    "double_dqn_idle": [],
+    "dqn_no_bias": [],
+    "double_dqn_no_bias": [],
 }
+schedules: List[tuple[str, List[Dict[str, Any]]]] = [("INITIAL SCHEDULE", FLIGHTS_INITIAL)]
 
-final_results = {name: evaluate_agent_performance(final_env, solver, name) for name, solver in final_solvers.items()}
-print_results_table(final_results, "TRAINED FINAL")
+for disruption_iteration in range(1, N_ITERATIONS + 5):
+    logger.info(
+        f"[disruption_cycle] Iteration {disruption_iteration}/{N_ITERATIONS}: generating disruption from original schedule"
+    )
+    flights_disrupted_iteration = cast(
+        List[Dict[str, Any]],
+        dg.generate(FLIGHTS_INITIAL, actions=build_disruption_actions()),
+    )
+    schedules.append((f"DISRUPTED SCHEDULE {disruption_iteration}", flights_disrupted_iteration))
 
-fig, ax = plt.subplots(figsize=(10, 5))
+    logger.info(
+        f"[PRE-RETRAINING EVAL] Iteration {disruption_iteration}/{N_ITERATIONS}: generating disruption from original schedule"
+    )
+    evaluate_models_on_schedule(
+        flights_disrupted_iteration,
+        f"DISRUPTED PRE-RETRAIN {disruption_iteration}",
+        False,
+    )
 
-models = {
-    "DQN (full)": (dqn_agent_scores, "#1f77b4"),
-    "Double DQN (full)": (double_dqn_agent_scores, "#ff7f0e"),
-    "DQN (Idle)": (dqn_agent_idle_scores, "#a6cee3"),
-    "Double DQN (Idle)": (double_dqn_agent_idle_scores, "#fdbf6f"),
-    "DQN (no_bias)": (dqn_agent_no_bias_scores, "#a6cee3"),
-    "Double DQN (no_bias)": (double_dqn_agent_no_bias_scores, "#fdbf6f"),
-}
+    output = train_agents_on_schedule(
+        flights_disrupted_iteration,
+        1,
+        f"disrupted_retrain_iter{disruption_iteration}",
+    )
 
-for name, (scores, color) in models.items():
-    if scores:
-        ax.plot(scores, color=color, alpha=0.15, linewidth=1)
-        window = max(1, len(scores) // 20)
-        smoothed = pd.Series(scores).rolling(window=window, min_periods=1).mean()
-        ax.plot(smoothed, color=color, linewidth=2, label=name)
+    logger.info(
+        f"[POST-RETRAINING EVAL] Iteration {disruption_iteration}/{N_ITERATIONS}: generating disruption from original schedule"
+    )
+    evaluate_models_on_schedule(
+        flights_disrupted_iteration,
+        f"DISRUPTED POST-RETRAIN {disruption_iteration}",
+        False,
+    )
 
-ax.set_title("Agent Training Performance Comparison", fontweight="bold")
-ax.set_xlabel("Episodes")
-ax.set_ylabel("Scores")
-ax.grid(True, linestyle="--", alpha=0.5)
-ax.legend(loc="upper left")
+    for key, scores in output.items():
+        if key in disrupted_scores.keys():
+            disrupted_scores[key].extend(scores)
 
-plt.tight_layout()
-
-# Save the plot directly under the project root next to your logging targets
-save_path = PROJECT_ROOT / "training_performance.png"
-plt.savefig(save_path, dpi=300)
-plt.close()
-
-print(f"Plot saved successfully at: {save_path}")
-
-# --- DISRUPTED SCHEDULE EVALUATION ---
-logger.info("\nGenerating disrupted schedule variant for robustness validation...")
-dg = DisruptionGenerator(AIRPORTS, dist_dict)
-FLIGHTS_TEST = dg.generate(
-    FLIGHTS,  # type: ignore
-    actions=[
-        {
-            "action": "add_delay",
-            "target": "random",
-            "count": max(1, N // 4),  # Changed from N_FLIGHTS to N
-            "min_delay": 60,
-            "max_delay": 180,
-        },
-        {
-            "action": "replace_airport",
-            "target": list(np.random.choice(AIRPORTS, size=1)),  # Enforce iterable target if expected
-            "field": "origin",
-            "method": "closest",
-        },
-    ],
+# --- FINAL EVALUATION ON BOTH SCHEDULES ---
+logger.info("\nPhase 3/3: Final evaluation on initial and disrupted schedules...")
+FLIGHTS_FINAL_DISRUPTED = cast(
+    List[Dict[str, Any]],
+    dg.generate(FLIGHTS_INITIAL, actions=build_disruption_actions()),
 )
+schedules.append(("NOT RETRAINED DISRUPTED SCHEDULE", FLIGHTS_FINAL_DISRUPTED))
+for _ in schedules:
+    evaluate_models_on_schedule(_[1], _[0], False)
 
-disrupted_env = AirlineEnv(
-    FLIGHTS_TEST,  # Injecting the disrupted pool
-    PLANES,
-    dist_dict,
-    AIRPORTS,
-    penalty,
-    use_clipping=REWARD_CONFIG["final_eval_use_clipping"],
-)
+# # Create a 1x2 grid of plots sharing the same Y-axis scale
+# fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6), sharey=True)
 
-disrupted_solvers = {
-    "Random Baseline": RandomSolver(),
-    "Greedy Baseline": ClosestPlaneGreedySolver(),
-    "DQN (Idle)": DQNSolver(dqn_agent_idle),
-    "Double DQN (Idle)": DQNSolver(double_dqn_agent_idle),
-    "DQN (no_bias)": DQNSolver(dqn_agent_no_bias),
-    "Double DQN (no_bias)": DQNSolver(double_dqn_agent_no_bias),
-    "DQN (full)": DQNSolver(dqn_agent),
-    "Double DQN (full)": DQNSolver(double_dqn_agent),
-}
+# # Define models mapping directly to their targeted subplot
+# plots_config = [
+#     (ax1, "Initial Training Baseline", {
+#         "DQN (full)": (initial_scores["dqn_full"], "#2a9d8f"),
+#         "Double DQN (full)": (initial_scores["double_dqn_full"], "#e76f51"),
+#     }),
+#     (ax2, "Post-Disruption Retraining", {
+#         "DQN (full)": (disrupted_scores["dqn_full"], "#1f77b4"),
+#         "Double DQN (full)": (disrupted_scores["double_dqn_full"], "#ff7f0e"),
+#         "DQN (Idle)": (disrupted_scores["dqn_idle"], "#a6cee3"),
+#         "Double DQN (Idle)": (disrupted_scores["double_dqn_idle"], "#fdbf6f"),
+#         "DQN (no_bias)": (disrupted_scores["dqn_no_bias"], "#8dd3c7"),
+#         "Double DQN (no_bias)": (disrupted_scores["double_dqn_no_bias"], "#fb8072"),
+#     })
+# ]
 
-logger.info("Executing Robustness Evaluation Matrix...")
-disrupted_results = {
-    name: evaluate_agent_performance(disrupted_env, solver, name) for name, solver in disrupted_solvers.items()
-}
-print_results_table(disrupted_results, "DISRUPTED TEST")
+# for ax, title, models in plots_config:
+#     for name, (scores, color) in models.items():
+#         if scores:
+#             ax.plot(scores, color=color, alpha=0.15, linewidth=1)
+#             window = max(1, len(scores) // 20)
+#             smoothed = pd.Series(scores).rolling(window=window, min_periods=1).mean()
+#             ax.plot(smoothed, color=color, linewidth=2, label=name)
+
+#     ax.set_title(title, fontweight="bold")
+#     ax.set_xlabel("Episodes")
+#     ax.grid(True, linestyle="--", alpha=0.5)
+#     ax.legend(loc="upper left")
+
+# ax1.set_ylabel("Scores")
+# fig.suptitle("Agent Training Performance Comparison", fontsize=14, fontweight="bold", y=1.02)
+
+# plt.tight_layout()
+# save_path = PROJECT_ROOT / "training_performance_subplots.png"
+# plt.savefig(save_path, dpi=300, bbox_inches="tight")
+# plt.close()

@@ -73,8 +73,8 @@ MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
 }
 
 MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
-    "DQN": {"n_episodes": 750, "log_interval": 10},
-    "DOUBLE_DQN": {"n_episodes": 750, "log_interval": 10},
+    "DQN": {"n_episodes": 225, "log_interval": 75},
+    "DOUBLE_DQN": {"n_episodes": 225, "log_interval": 75},
 }
 
 RL_TRAINING_CONFIG: Dict[str, float] = {
@@ -85,7 +85,7 @@ REWARD_CONFIG: Dict[str, Any] = {
     "train_use_clipping": True,
     "eval_use_clipping": True,
     "final_eval_use_clipping": True,
-    "penalty_per_min": 100,
+    "penalty_per_min": 150,
 }
 
 EARLY_STOPPING_CONFIG: Dict[str, Any] = {

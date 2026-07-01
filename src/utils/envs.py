@@ -326,9 +326,16 @@ class QLearningSolver(BaseSolver):
 
 # --- CONSOLIDATED CROSS-VALIDATION UNIFIED TESTING STAGE ENGINE ---
 def run_unified_execution(
-    env: AirlineEnv, solver: BaseSolver, flights: list, solver_name: str = "SOLVER"
+    env: AirlineEnv,
+    solver: BaseSolver,
+    flights: list,
+    solver_name: str = "SOLVER",
+    verbose: bool = True,
 ) -> tuple[float, float]:
-    logger.info(f"\n{'=' * 30} {solver_name.upper()} EXECUTION {'=' * 30}")
+
+    # Wrap the header logs
+    if verbose:
+        logger.info(f"\n{'=' * 30} {solver_name.upper()} EXECUTION {'=' * 30}")
 
     state = env.get_vector_state(env.reset_with_schedule(flights))
     total_profit, total_delay_mins, done = 0.0, 0.0, False
@@ -339,13 +346,14 @@ def run_unified_execution(
         f"{'ARRIVE':>6} | {'PROFIT'}"
     )
     line_width = len(header) + 2
-    logger.info(header)
-    logger.info("-" * line_width)
+
+    if verbose:
+        logger.info(header)
+        logger.info("-" * line_width)
 
     while not done:
         f = flights[env.current_f_idx]
 
-        # Enforce step assignment indices via solver choice definitions
         action = solver.choose_action(state, env)
         plane_start_loc = env.locs[action]
         p_name = env.planes[action]
@@ -355,24 +363,27 @@ def run_unified_execution(
         total_delay_mins += flight_delay
         total_profit += reward
 
-        # --- PRE-PROCESS STRINGS TO PREVENT NESTED QUOTE PARSING ERRORS ---
         relocated = plane_start_loc != f["origin"]
         from_display = plane_start_loc[:6] if relocated else "-"
         origin_display = f"{f['origin']}*" if relocated else f["origin"]
         actual_start_display = f"{info['actual_start']:.0f}!" if flight_delay > 0 else f"{info['actual_start']:.0f}"
 
-        logger.info(
-            f"{f['id']:<8} | {f['pass']:<4} | {p_name.upper():<10} | "
-            f"{from_display:<6} | {origin_display:<8} | "
-            f"{f['dest']:<6} | {f['start']:>5.0f} | {actual_start_display:>6} | "
-            f"{info['arrival_at_dest']:>6.0f} | ${reward:>10,.0f}"
-        )
+        # Wrap the per-flight logs
+        if verbose:
+            logger.info(
+                f"{f['id']:<8} | {f['pass']:<4} | {p_name.upper():<10} | "
+                f"{from_display:<6} | {origin_display:<8} | "
+                f"{f['dest']:<6} | {f['start']:>5.0f} | {actual_start_display:>6} | "
+                f"{info['arrival_at_dest']:>6.0f} | ${reward:>10,.0f}"
+            )
         state = env.get_vector_state(next_raw_state)
 
-    logger.info("-" * line_width)
-    logger.info(f"TOTAL {solver_name.upper()} PROFIT: ${total_profit:>12,.2f}")
-    logger.info(f"TOTAL SYSTEM DELAY: {total_delay_mins:.0f} minutes")
-    logger.info("LEGEND: (!) Delayed | (*) Relocated | SCHED/ACTUAL/ARRIVE in minutes from T=0")
-    logger.info("=" * line_width + "\n")
+    # Wrap the footer summaries
+    if verbose:
+        logger.info("-" * line_width)
+        logger.info(f"TOTAL {solver_name.upper()} PROFIT: ${total_profit:>12,.2f}")
+        logger.info(f"TOTAL SYSTEM DELAY: {total_delay_mins:.0f} minutes")
+        logger.info("LEGEND: (!) Delayed | (*) Relocated | SCHED/ACTUAL/ARRIVE in minutes from T=0")
+        logger.info("=" * line_width + "\n")
 
     return total_profit, total_delay_mins

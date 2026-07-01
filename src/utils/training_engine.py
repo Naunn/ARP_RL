@@ -116,12 +116,16 @@ def train_dqn_iteration(
     early_stopping: bool = True,
     model_name: str = "DQN",
     training_name: str | None = None,
+    verbose: bool = True,
 ) -> list[float]:
     """Runs a complete generational training lifecycle iteration containing n_episodes."""
     scores = []
     start_time = time.time()
     log_interval: int = MODEL_TRAINING_PARAMS[model_name]["log_interval"]
-    logger.info(f"[{model_name}] (Training mode: {training_name}) Starting execution loop ({n_episodes} eps)")
+
+    # Silence initial lifecycle log if not verbose
+    if verbose:
+        logger.info(f"[{model_name}] (Training mode: {training_name}) Starting execution loop ({n_episodes} eps)")
 
     best_rolling_profit = float("-inf")
     patience_counter = 0
@@ -141,15 +145,19 @@ def train_dqn_iteration(
                         agent.policy_net.state_dict(),
                         f"checkpoints/best_{model_name.lower()}_iter{iteration:03d}.pth",
                     )
+                    # We usually KEEP checkpoint logs even if verbose=False
+                    # so you know a model saved, but you can wrap this if you want absolute silence
                     log_checkpoint(best_rolling_profit, ep)
             elif agent.epsilon <= cfg["min_epsilon_to_stop"]:
                 patience_counter += 1
 
             if patience_counter >= cfg["patience"]:
+                # Always good to know why training stopped early
                 log_early_stop(ep, n_episodes, cfg["patience"], best_rolling_profit)
                 break
 
-        if ep == 1 or ep % log_interval == 0 or ep == n_episodes:
+        # Wrap the frequent spam logs (the progress bar steps)
+        if verbose and (ep == 1 or ep % log_interval == 0 or ep == n_episodes):
             avg_score = float(np.mean(scores[-log_interval:]))
             eta_str = time.strftime(
                 "%H:%M:%S",
