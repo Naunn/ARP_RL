@@ -42,7 +42,7 @@ PLANES_TEMPLATES: Dict[str, Dict[str, Any]] = {
     },
 }
 
-N_ITERATIONS: int = 1
+N_ITERATIONS: int = 10
 
 # --- STRUCTURAL CONFIGURATIONS ---
 MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
@@ -62,7 +62,7 @@ MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
         "lr": 0.0005,
         "gamma": 0.99,
         "epsilon_decay": 0.9995,
-        "init_epsilon": 0.1,
+        "init_epsilon": 0.8,
         "min_epsilon": 0.1,
         "batch_size": 256,
         "tau": 0.001,
@@ -73,8 +73,8 @@ MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
 }
 
 MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
-    "DQN": {"n_episodes": 225, "log_interval": 75},
-    "DOUBLE_DQN": {"n_episodes": 225, "log_interval": 75},
+    "DQN": {"n_episodes": 300, "log_interval": 100},
+    "DOUBLE_DQN": {"n_episodes": 300, "log_interval": 100},
 }
 
 RL_TRAINING_CONFIG: Dict[str, float] = {

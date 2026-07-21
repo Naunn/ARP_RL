@@ -48,7 +48,7 @@ class AirlineEnv:
         self.num_cities = len(self.cities)
 
         # Pre-build structural identity mapping matrices for ultra-fast one-hot vector lookups
-        self.city_one_hot_eye = np.eye(self.num_cities, dtype=np.float32)
+        self.city_one_hot_eye = np.eye(self.num_cities, dtype=np.float32)  # identity matrix
 
         self.reset()
 
@@ -70,11 +70,11 @@ class AirlineEnv:
 
         # FLEET SYSTEM VECTOR COMPUTATION
         fleet_list = []
-        active_f = self.flights[f_idx] if 0 <= f_idx < len(self.flights) else None
-        active_origin = active_f["origin"] if active_f else None
-        active_start_t = float(active_f["start"]) if active_f else 0.0
+        active_f = self.flights[f_idx] if 0 <= f_idx < len(self.flights) else None  # check if flight is active
+        active_origin = active_f["origin"] if active_f else None  # get origin of a flight
+        active_start_t = float(active_f["start"]) if active_f else 0.0  # get start time of a flight
 
-        for idx, (t, loc) in enumerate(zip(times, locs)):
+        for idx, (t, loc) in enumerate(zip(times, locs)):  # loop through all planes
             p_cfg = self.plane_configs[self.planes[idx]]
 
             # Fast vectorized one-hot parsing via precomputed identity mapping matrix lookup arrays
@@ -131,7 +131,14 @@ class AirlineEnv:
         while len(matrix_list) < self.flight_window_size:
             matrix_list.append([0.0, 0.0, 0.0, 0.0])
 
-        return np.array(fleet_list, dtype=np.float32), np.array(matrix_list, dtype=np.float32)
+        return (
+            np.array(
+                fleet_list, dtype=np.float32
+            ),  # 1D flat array containing normalized metrics for every plane in the fleet concatenated with the current flight's requirements
+            np.array(
+                matrix_list, dtype=np.float32
+            ),  # 2D array of shape (flight_window_size, 4) representing a normalized snapshot of upcoming flight demands
+        )
 
     def get_state_dim(self) -> tuple[int, int]:
         """Tracks input dimensions to guide neural sequence structural layer sizes."""

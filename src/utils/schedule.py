@@ -26,7 +26,7 @@ def generate_random_flights(n, cities, start_time_range, pass_range):
 
         # Ensure start time is not smaller than previous
         # We add a random gap (0 to 60 mins) to make it realistic
-        current_time = random.randint(current_time, max_time)
+        current_time = random.randint(current_time, min(current_time + 60, max_time))
 
         flight = {
             "id": 100 + i,  # Format like 101, 102, etc.
@@ -153,3 +153,7 @@ def build_flight_pool(flights_df: pd.DataFrame, itineraries_df: pd.DataFrame):
         )
 
     return pool
+
+
+# TODO: boxplot zamiast
+# TODO: nagroda za revenue jest w sumie bez sensu
