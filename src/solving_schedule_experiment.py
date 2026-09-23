@@ -12,12 +12,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+from matplotlib.patches import Patch
 from scipy.ndimage import uniform_filter1d
 
-from src.agents.dqn_agent import DoubleDQNAgent, DQNAgent
+from src.agents.dqn_agent import DoubleDQNAgent
 from src.config import (
     MODEL_HYPERPARAMS,
     MODEL_TRAINING_PARAMS,
+    N_ITERATIONS,
     REWARD_CONFIG,
 )
 
@@ -34,7 +36,7 @@ from src.utils import (
     generate_random_flights,
     generate_trap_schedule,
     get_model_filename,
-    initialize_dqn_agent,
+    initialize_agent,
     log_iteration_start,
     logger,
     reset_agent_exploration,
@@ -142,24 +144,24 @@ def train_agents_on_schedule(
 
         current_schedule = per_iteration_schedule_fn(iteration) if per_iteration_schedule_fn else schedule_flights
 
-        dqn_eps: int = MODEL_TRAINING_PARAMS["DQN"]["n_episodes"]
+        # dqn_eps: int = MODEL_TRAINING_PARAMS["DQN"]["n_episodes"]
         ddqn_eps: int = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["n_episodes"]
 
-        reset_agent_exploration(dqn_agent, dqn_eps, MODEL_HYPERPARAMS["DQN"])
+        # reset_agent_exploration(dqn_agent, dqn_eps, MODEL_HYPERPARAMS["DQN"])
         reset_agent_exploration(double_dqn_agent, ddqn_eps, MODEL_HYPERPARAMS["DOUBLE_DQN"])
-        reset_agent_exploration(dqn_agent_idle, dqn_eps, dqn_agent_idle_config)
+        # reset_agent_exploration(dqn_agent_idle, dqn_eps, dqn_agent_idle_config)
         reset_agent_exploration(double_dqn_agent_idle, ddqn_eps, double_dqn_agent_idle_config)
-        reset_agent_exploration(dqn_agent_no_bias, dqn_eps, dqn_agent_no_bias_config)
-        reset_agent_exploration(double_dqn_agent_no_bias, ddqn_eps, double_dqn_agent_no_bias_config)
+        # reset_agent_exploration(dqn_agent_no_bias, dqn_eps, dqn_agent_no_bias_config)
+        # reset_agent_exploration(double_dqn_agent_no_bias, ddqn_eps, double_dqn_agent_no_bias_config)
 
-        dqn_env = AirlineEnv(
-            current_schedule,
-            PLANES,
-            dist_dict,
-            AIRPORTS,
-            penalty,
-            use_clipping=REWARD_CONFIG["train_use_clipping"],
-        )
+        # dqn_env = AirlineEnv(
+        #     current_schedule,
+        #     PLANES,
+        #     dist_dict,
+        #     AIRPORTS,
+        #     penalty,
+        #     use_clipping=REWARD_CONFIG["train_use_clipping"],
+        # )
         ddqn_env = AirlineEnv(
             current_schedule,
             PLANES,
@@ -177,15 +179,15 @@ def train_agents_on_schedule(
         #     use_clipping=REWARD_CONFIG["eval_use_clipping"],
         # )
 
-        dqn_agent_idle_scores = train_dqn_iteration(
-            dqn_agent_idle,
-            dqn_env,
-            dqn_eps,
-            iteration,
-            model_name="DQN",
-            training_name=f"{phase_name}_idle",
-            verbose=verbose,
-        )
+        # dqn_agent_idle_scores = train_dqn_iteration(
+        #     dqn_agent_idle,
+        #     dqn_env,
+        #     dqn_eps,
+        #     iteration,
+        #     model_name="DQN",
+        #     training_name=f"{phase_name}_idle",
+        #     verbose=verbose,
+        # )
         # logger.info(
         #     f"--- dqn_agent_idle_scores ({phase_name}): {dqn_agent_idle_scores} ---"
         # )
@@ -201,39 +203,39 @@ def train_agents_on_schedule(
         # logger.info(
         #     f"--- double_dqn_agent_idle_scores ({phase_name}): {double_dqn_agent_idle_scores} ---"
         # )
-        dqn_agent_no_bias_scores = train_dqn_iteration(
-            dqn_agent_no_bias,
-            dqn_env,
-            dqn_eps,
-            iteration,
-            model_name="DQN",
-            training_name=f"{phase_name}_no_bias",
-            verbose=verbose,
-        )
+        # dqn_agent_no_bias_scores = train_dqn_iteration(
+        #     dqn_agent_no_bias,
+        #     dqn_env,
+        #     dqn_eps,
+        #     iteration,
+        #     model_name="DQN",
+        #     training_name=f"{phase_name}_no_bias",
+        #     verbose=verbose,
+        # )
         # logger.info(
         #     f"--- dqn_agent_no_bias_scores ({phase_name}): {dqn_agent_no_bias_scores} ---"
         # )
-        double_dqn_agent_no_bias_scores = train_dqn_iteration(
-            double_dqn_agent_no_bias,
-            ddqn_env,
-            ddqn_eps,
-            iteration,
-            model_name="DOUBLE_DQN",
-            training_name=f"{phase_name}_no_bias",
-            verbose=verbose,
-        )
+        # double_dqn_agent_no_bias_scores = train_dqn_iteration(
+        #     double_dqn_agent_no_bias,
+        #     ddqn_env,
+        #     ddqn_eps,
+        #     iteration,
+        #     model_name="DOUBLE_DQN",
+        #     training_name=f"{phase_name}_no_bias",
+        #     verbose=verbose,
+        # )
         # logger.info(
         #     f"--- double_dqn_agent_no_bias_scores ({phase_name}): {double_dqn_agent_no_bias_scores} ---"
         # )
-        dqn_agent_scores = train_dqn_iteration(
-            dqn_agent,
-            dqn_env,
-            dqn_eps,
-            iteration,
-            model_name="DQN",
-            training_name=f"{phase_name}_full",
-            verbose=verbose,
-        )
+        # dqn_agent_scores = train_dqn_iteration(
+        #     dqn_agent,
+        #     dqn_env,
+        #     dqn_eps,
+        #     iteration,
+        #     model_name="DQN",
+        #     training_name=f"{phase_name}_full",
+        #     verbose=verbose,
+        # )
         # logger.info(f"--- dqn_agent_scores ({phase_name}): {dqn_agent_scores} ---")
         double_dqn_agent_scores = train_dqn_iteration(
             double_dqn_agent,
@@ -248,23 +250,23 @@ def train_agents_on_schedule(
         #     f"--- double_dqn_agent_scores ({phase_name}): {double_dqn_agent_scores} ---"
         # )
 
-        p1 = get_model_filename(iteration, *meta_dims, dqn_eps, f"DQN_{phase_name}")
+        # p1 = get_model_filename(iteration, *meta_dims, dqn_eps, f"DQN_{phase_name}")
         p2 = get_model_filename(iteration, *meta_dims, ddqn_eps, f"DOUBLE_DQN_{phase_name}")
-        p1_idle = get_model_filename(iteration, *meta_dims, dqn_eps, f"DQN_{phase_name}_idle")
+        # p1_idle = get_model_filename(iteration, *meta_dims, dqn_eps, f"DQN_{phase_name}_idle")
         p2_idle = get_model_filename(iteration, *meta_dims, ddqn_eps, f"DOUBLE_DQN_{phase_name}_idle")
-        p1_no_bias = get_model_filename(iteration, *meta_dims, dqn_eps, f"DQN_{phase_name}_no_bias")
-        p2_no_bias = get_model_filename(
-            iteration,
-            *meta_dims,
-            ddqn_eps,
-            f"DOUBLE_DQN_{phase_name}_no_bias",
-        )
-        torch.save(dqn_agent.policy_net.state_dict(), p1)
+        # p1_no_bias = get_model_filename(iteration, *meta_dims, dqn_eps, f"DQN_{phase_name}_no_bias")
+        # p2_no_bias = get_model_filename(
+        #     iteration,
+        #     *meta_dims,
+        #     ddqn_eps,
+        #     f"DOUBLE_DQN_{phase_name}_no_bias",
+        # )
+        # torch.save(dqn_agent.policy_net.state_dict(), p1)
         torch.save(double_dqn_agent.policy_net.state_dict(), p2)
-        torch.save(dqn_agent_idle.policy_net.state_dict(), p1_idle)
+        # torch.save(dqn_agent_idle.policy_net.state_dict(), p1_idle)
         torch.save(double_dqn_agent_idle.policy_net.state_dict(), p2_idle)
-        torch.save(dqn_agent_no_bias.policy_net.state_dict(), p1_no_bias)
-        torch.save(double_dqn_agent_no_bias.policy_net.state_dict(), p2_no_bias)
+        # torch.save(dqn_agent_no_bias.policy_net.state_dict(), p1_no_bias)
+        # torch.save(double_dqn_agent_no_bias.policy_net.state_dict(), p2_no_bias)
 
         # mid_solvers = {
         #     "Random Baseline": RandomSolver(),
@@ -297,11 +299,11 @@ def build_current_solvers() -> Dict[str, Any]:
     return {
         "Random Baseline": RandomSolver(),
         "Greedy Baseline": ClosestPlaneGreedySolver(),
-        "DQN Agent (idle)": DQNSolver(dqn_agent_idle),
+        # "DQN Agent (idle)": DQNSolver(dqn_agent_idle),
         "Double DQN Agent (idle)": DQNSolver(double_dqn_agent_idle),
-        "DQN Agent (no_bias)": DQNSolver(dqn_agent_no_bias),
-        "Double DQN Agent (no_bias)": DQNSolver(double_dqn_agent_no_bias),
-        "DQN (full)": DQNSolver(dqn_agent),
+        # "DQN Agent (no_bias)": DQNSolver(dqn_agent_no_bias),
+        # "Double DQN Agent (no_bias)": DQNSolver(double_dqn_agent_no_bias),
+        # "DQN (full)": DQNSolver(dqn_agent),
         "Double DQN (full)": DQNSolver(double_dqn_agent),
     }
 
@@ -330,13 +332,13 @@ aircraft_df = pd.read_csv(TRAINING_DATA_DIR / "aircraft.csv").drop_duplicates(
     subset="fixed_cost  hourly_cost initial_airport  seats  speed".split()
 )
 
-N = 15  # 15 for testing random + trap (100 iter); round(flights_df.shape[0]/3) for sampled - too long for 100 iter :(
-C_N = 3  # 3 for testing random + trap (100 iter); for sampled does not matter
-P_N = 2  # 2 for testing random + trap (100 iter); round(aircraft_df.shape[0]/3) for sampled - too long for 100 iter :(
+N = 25  # 15 for testing random + trap (100 iter); round(flights_df.shape[0]/3) for sampled - too long for 100 iter :(
+C_N = 4  # 3 for testing random + trap (100 iter); for sampled does not matter
+P_N = 4  # 2 for testing random + trap (100 iter); round(aircraft_df.shape[0]/3) for sampled - too long for 100 iter :(
 trap = False
 
 iter_viz = {}
-for i in range(100):
+for i in range(N_ITERATIONS):
     logger.info(
         f"\n====================================================== [ITERATION {i + 1}] ======================================================"
     )
@@ -377,7 +379,7 @@ for i in range(100):
         pd.DataFrame(FLIGHTS)["total_ticket_price"] / pd.DataFrame(FLIGHTS)["pass"],
         weights=pd.DataFrame(FLIGHTS)["pass"],
     )
-    FLIGHTS = SAMP_FLIGHTS.to_dict("records")
+    # FLIGHTS = SAMP_FLIGHTS.to_dict("records")
 
     PLANES = build_planes(aircraft_df.sample(P_N))
 
@@ -403,13 +405,13 @@ for i in range(100):
     )
 
     setup_checkpoint_dir()
-    dqn_agent = initialize_dqn_agent(dummy_env, DQNAgent, MODEL_HYPERPARAMS["DQN"])
-    double_dqn_agent = initialize_dqn_agent(dummy_env, DoubleDQNAgent, MODEL_HYPERPARAMS["DOUBLE_DQN"])
+    # dqn_agent = initialize_agent(dummy_env, DQNAgent, MODEL_HYPERPARAMS["DQN"])
+    double_dqn_agent = initialize_agent(dummy_env, DoubleDQNAgent, MODEL_HYPERPARAMS["DOUBLE_DQN"])
 
-    dqn_agent_idle_config = copy.deepcopy(MODEL_HYPERPARAMS["DQN"])
-    dqn_agent_idle_config["use_attention"] = False
-    dqn_agent_idle_config["use_expert_bias"] = False
-    dqn_agent_idle_config["use_action_masking"] = False
+    # dqn_agent_idle_config = copy.deepcopy(MODEL_HYPERPARAMS["DQN"])
+    # dqn_agent_idle_config["use_attention"] = False
+    # dqn_agent_idle_config["use_expert_bias"] = False
+    # dqn_agent_idle_config["use_action_masking"] = False
     # dqn_agent_idle_config["init_epsilon"] = 0.8
 
     double_dqn_agent_idle_config = copy.deepcopy(MODEL_HYPERPARAMS["DOUBLE_DQN"])
@@ -418,19 +420,19 @@ for i in range(100):
     double_dqn_agent_idle_config["use_action_masking"] = False
     # double_dqn_agent_idle_config["init_epsilon"] = 0.8
 
-    dqn_agent_idle = initialize_dqn_agent(dummy_env, DQNAgent, dqn_agent_idle_config)
-    double_dqn_agent_idle = initialize_dqn_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_idle_config)
+    # dqn_agent_idle = initialize_agent(dummy_env, DQNAgent, dqn_agent_idle_config)
+    double_dqn_agent_idle = initialize_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_idle_config)
 
-    dqn_agent_no_bias_config = copy.deepcopy(MODEL_HYPERPARAMS["DQN"])
-    dqn_agent_no_bias_config["use_expert_bias"] = False
-    dqn_agent_no_bias_config["use_action_masking"] = False
+    # dqn_agent_no_bias_config = copy.deepcopy(MODEL_HYPERPARAMS["DQN"])
+    # dqn_agent_no_bias_config["use_expert_bias"] = False
+    # dqn_agent_no_bias_config["use_action_masking"] = False
 
-    double_dqn_agent_no_bias_config = copy.deepcopy(MODEL_HYPERPARAMS["DOUBLE_DQN"])
-    double_dqn_agent_no_bias_config["use_expert_bias"] = False
-    double_dqn_agent_no_bias_config["use_action_masking"] = False
+    # double_dqn_agent_no_bias_config = copy.deepcopy(MODEL_HYPERPARAMS["DOUBLE_DQN"])
+    # double_dqn_agent_no_bias_config["use_expert_bias"] = False
+    # double_dqn_agent_no_bias_config["use_action_masking"] = False
 
-    dqn_agent_no_bias = initialize_dqn_agent(dummy_env, DQNAgent, dqn_agent_no_bias_config)
-    double_dqn_agent_no_bias = initialize_dqn_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_no_bias_config)
+    # # dqn_agent_no_bias = initialize_agent(dummy_env, DQNAgent, dqn_agent_no_bias_config)
+    # double_dqn_agent_no_bias = initialize_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_no_bias_config)
 
     meta_dims = (len(FLIGHTS), len(AIRPORTS), len(PLANES))
     FLIGHTS_INITIAL = cast(List[Dict[str, Any]], copy.deepcopy(FLIGHTS))
@@ -447,19 +449,98 @@ for i in range(100):
     iter_viz[f"{i}"] = (training_scores, eval_results)
 
 
-with open("/home/bartosz/repos/ARP_RL/data/experiments/random_100_itr.pkl", "wb") as f:
+with open("/home/bartosz/repos/ARP_RL/data/experiments/sampled_100_DDQN_itr.pkl", "wb") as f:
     pickle.dump(iter_viz, f)
 
-with open("/home/bartosz/repos/ARP_RL/data/experiments/random_100_itr.pkl", "rb") as f:
+with open("/home/bartosz/repos/ARP_RL/data/experiments/sampled_100_DDQN_itr.pkl", "rb") as f:
     loaded_dict = pickle.load(f)
 
 iter_viz = loaded_dict
 
+# Simple box plot: reward per model across all iterations.
+box_models = list(iter_viz["0"][1].keys())
+box_iterations = list(range(len(iter_viz)))
+box_rewards = [[iter_viz[f"{i}"][1][model][0] for i in box_iterations] for model in box_models]
+
+plt.figure(figsize=(10, 5))
+plt.boxplot(box_rewards, tick_labels=box_models, showfliers=False)
+plt.title(f"Rewards across {N_ITERATIONS} iterations")
+# plt.xlabel("Model")
+plt.ylabel("Reward ($)")
+plt.xticks(rotation=20, ha="right")
+plt.grid(True, axis="y", alpha=0.3, linestyle="--")
+plt.tight_layout()
+plt.show()
 
 # Extract data by model across iterations
 models = iter_viz["0"][1].keys()
 iteration_indices = list(range(len(iter_viz)))
 
+# Extract data by model across iterations
+models = iter_viz["0"][1].keys()
+iteration_indices = list(range(len(iter_viz)))
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+
+# Define colors for consistency
+colors = plt.cm.tab10(range(len(models)))
+
+# Plot profit
+for idx, model in enumerate(models):
+    profits = [iter_viz[f"{i}"][1][model][0] for i in iteration_indices]
+
+    # Scatter plot with transparency
+    ax1.scatter(
+        iteration_indices,
+        profits,
+        alpha=0.4,
+        s=100,
+        color=colors[idx],
+        label=model,
+        edgecolors="black",
+        linewidth=0.5,
+    )
+
+    # Smoothed trend line
+    if len(profits) > 1:
+        smoothed = uniform_filter1d(profits, size=max(1, len(profits) // 3))
+        ax1.plot(iteration_indices, smoothed, color=colors[idx], linewidth=2.5, alpha=0.8)
+
+ax1.set_xlabel("Iteration", fontsize=11, fontweight="bold")
+ax1.set_ylabel("Profit ($)", fontsize=11, fontweight="bold")
+ax1.set_title("Model Profit Across Iterations", fontsize=12, fontweight="bold")
+ax1.legend(loc="best", framealpha=0.9)
+ax1.grid(True, alpha=0.3, linestyle="--")
+
+# Plot delay
+for idx, model in enumerate(models):
+    delays = [iter_viz[f"{i}"][1][model][1] for i in iteration_indices]
+
+    # Scatter plot with transparency
+    ax2.scatter(
+        iteration_indices,
+        delays,
+        alpha=0.4,
+        s=100,
+        color=colors[idx],
+        label=model,
+        edgecolors="black",
+        linewidth=0.5,
+    )
+
+    # Smoothed trend line
+    if len(delays) > 1:
+        smoothed = uniform_filter1d(delays, size=max(1, len(delays) // 3))
+        ax2.plot(iteration_indices, smoothed, color=colors[idx], linewidth=2.5, alpha=0.8)
+
+ax2.set_xlabel("Iteration", fontsize=11, fontweight="bold")
+ax2.set_ylabel("Delay (minutes)", fontsize=11, fontweight="bold")
+ax2.set_title("Model Delay Across Iterations", fontsize=12, fontweight="bold")
+ax2.legend(loc="best", framealpha=0.9)
+ax2.grid(True, alpha=0.3, linestyle="--")
+
+plt.tight_layout()
+plt.show()
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
 
 # Define colors for consistency
@@ -560,7 +641,7 @@ markers = ["o", "s", "^", "D", "v", "P", "X", "*"]
 
 gathered_sets: list[tuple[str, dict[str, Any]]] = [
     ("Random Schedule", random_100_itr),
-    ("Trap Schedule", trap_100_itr),
+    ("Bottleneck Schedule", trap_100_itr),
     ("Sample Schedule", sample_100_itr),
 ]
 
@@ -795,4 +876,81 @@ fig2.legend(
 )
 
 fig2.tight_layout(rect=(0.0, 0.08, 1.0, 0.97))
+plt.show()
+
+# box plot: reward distribution over 100 iterations per schedule and model
+fig3, axes3 = plt.subplots(3, 1, figsize=(16, 11), sharex=True)
+
+for ax, (schedule_name, dataset) in zip(axes3, gathered_sets):
+    iter_keys = sorted_iteration_keys(dataset)
+
+    box_data: list[list[float]] = []
+    for model_name in models:
+        rewards = [dataset[k][1][model_name][0] for k in iter_keys]
+        box_data.append(rewards)
+
+    boxplot = ax.boxplot(
+        box_data,
+        patch_artist=True,
+        widths=0.6,
+        showfliers=False,
+        medianprops={"color": "black", "linewidth": 1.5},
+    )
+
+    for idx, box in enumerate(boxplot["boxes"]):
+        model_name = models[idx]
+        box.set_facecolor(model_colors.get(model_name, colors[idx % len(colors)]))
+        box.set_alpha(0.55)
+        box.set_edgecolor("black")
+        box.set_linewidth(1.0)
+
+    for whisker in boxplot["whiskers"]:
+        whisker.set_color("black")
+        whisker.set_linewidth(0.9)
+    for cap in boxplot["caps"]:
+        cap.set_color("black")
+        cap.set_linewidth(0.9)
+
+    ax.set_title(
+        f"{schedule_name}: Reward Distribution Across Iterations",
+        fontsize=PLOT_TITLE_FONTSIZE,
+        fontweight="bold",
+    )
+    ax.set_ylabel("Reward ($)", fontsize=AXIS_LABEL_FONTSIZE, fontweight="bold")
+    ax.tick_params(axis="y", which="major", labelsize=TICK_FONTSIZE)
+    ax.grid(True, axis="y", alpha=0.3, linestyle="--")
+
+axes3[-1].set_xlabel("Model", fontsize=AXIS_LABEL_FONTSIZE, fontweight="bold")
+axes3[-1].set_xticks(np.arange(1, len(models) + 1))
+axes3[-1].set_xticklabels(
+    [model_display_names.get(m, m) for m in models],
+    rotation=25,
+    ha="right",
+    fontsize=11,
+)
+
+legend_handles = [
+    Patch(
+        facecolor=model_colors.get(m, colors[idx % len(colors)]),
+        edgecolor="black",
+        alpha=0.55,
+        label=model_display_names.get(m, m),
+    )
+    for idx, m in enumerate(models)
+]
+fig3.legend(
+    handles=legend_handles,
+    loc="lower center",
+    bbox_to_anchor=(0.525, 0.0015),
+    ncol=max(1, len(legend_handles) // 2),
+    framealpha=0.95,
+    fontsize=LEGEND_FONTSIZE,
+    handlelength=1.4,
+    handletextpad=0.35,
+    columnspacing=0.8,
+    borderpad=0.25,
+    labelspacing=0.25,
+)
+
+fig3.tight_layout(rect=(0.0, 0.10, 1.0, 0.97))
 plt.show()

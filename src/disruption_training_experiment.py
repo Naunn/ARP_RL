@@ -30,7 +30,7 @@ from src.utils import (
     generate_random_flights,
     generate_trap_schedule,
     get_model_filename,
-    initialize_dqn_agent,
+    initialize_agent,
     log_iteration_start,
     logger,
     reset_agent_exploration,
@@ -400,8 +400,8 @@ for i in range(10):
     )
 
     setup_checkpoint_dir()
-    dqn_agent = initialize_dqn_agent(dummy_env, DQNAgent, MODEL_HYPERPARAMS["DQN"])
-    double_dqn_agent = initialize_dqn_agent(dummy_env, DoubleDQNAgent, MODEL_HYPERPARAMS["DOUBLE_DQN"])
+    dqn_agent = initialize_agent(dummy_env, DQNAgent, MODEL_HYPERPARAMS["DQN"])
+    double_dqn_agent = initialize_agent(dummy_env, DoubleDQNAgent, MODEL_HYPERPARAMS["DOUBLE_DQN"])
 
     dqn_agent_idle_config = copy.deepcopy(MODEL_HYPERPARAMS["DQN"])
     dqn_agent_idle_config["use_attention"] = False
@@ -415,8 +415,8 @@ for i in range(10):
     double_dqn_agent_idle_config["use_action_masking"] = False
     # double_dqn_agent_idle_config["init_epsilon"] = 0.8
 
-    dqn_agent_idle = initialize_dqn_agent(dummy_env, DQNAgent, dqn_agent_idle_config)
-    double_dqn_agent_idle = initialize_dqn_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_idle_config)
+    dqn_agent_idle = initialize_agent(dummy_env, DQNAgent, dqn_agent_idle_config)
+    double_dqn_agent_idle = initialize_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_idle_config)
 
     dqn_agent_no_bias_config = copy.deepcopy(MODEL_HYPERPARAMS["DQN"])
     dqn_agent_no_bias_config["use_expert_bias"] = False
@@ -426,8 +426,8 @@ for i in range(10):
     double_dqn_agent_no_bias_config["use_expert_bias"] = False
     double_dqn_agent_no_bias_config["use_action_masking"] = False
 
-    dqn_agent_no_bias = initialize_dqn_agent(dummy_env, DQNAgent, dqn_agent_no_bias_config)
-    double_dqn_agent_no_bias = initialize_dqn_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_no_bias_config)
+    dqn_agent_no_bias = initialize_agent(dummy_env, DQNAgent, dqn_agent_no_bias_config)
+    double_dqn_agent_no_bias = initialize_agent(dummy_env, DoubleDQNAgent, double_dqn_agent_no_bias_config)
 
     meta_dims = (len(FLIGHTS), len(AIRPORTS), len(PLANES))
     FLIGHTS_INITIAL = cast(List[Dict[str, Any]], copy.deepcopy(FLIGHTS))

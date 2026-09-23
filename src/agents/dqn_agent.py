@@ -24,7 +24,7 @@ class AttentionPoolingQNetwork(nn.Module):
         super(AttentionPoolingQNetwork, self).__init__()
         self.use_attention = bool(use_attention)
 
-        # The 'Phi' network: Processes each individual flight's features independently
+        # The 'Phi' network: Processes each individual flights features independently
         self.flight_encoder = nn.Sequential(
             nn.Linear(flight_feature_dim, hidden_dim),
             nn.ReLU(),
@@ -69,7 +69,7 @@ class AttentionPoolingQNetwork(nn.Module):
 
         mask_fill_value = torch.finfo(encoded_flights.dtype).min
 
-        # Direct verification of the layer's existence satisfies Pylance type validation safely
+        # Direct verification of the layers existence satisfies Pylance type validation safely
         if self.use_attention and self.flight_attention is not None:
             # Compute attention weights over valid items
             attention_logits = self.flight_attention(encoded_flights).squeeze(-1)
@@ -209,6 +209,7 @@ class DQNAgent:
         hidden_dim=256,
         use_attention=True,
         use_expert_bias=True,
+        expert_bias_weight=0.1,
         use_action_masking=True,
     ):
         self.fleet_dim = fleet_dim
@@ -221,6 +222,7 @@ class DQNAgent:
         self.batch_size = batch_size
         self.tau = tau
         self.use_expert_bias = bool(use_expert_bias)
+        self.expert_bias_weight = float(expert_bias_weight)
         self.use_action_masking = bool(use_action_masking)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -400,13 +402,12 @@ class DQNAgent:
             # Imitation Loss / Expert Bias (Masking Optional)
             if self.use_expert_bias and self.imitation_loss_fn is not None:
                 expert_actions_t = self._to_device_tensor(expert_actions, dtype=torch.long)
-                imitation_weight = 0.1 * float(self.epsilon)
 
                 q_for_imitation = (
                     q_logits.masked_fill(~action_masks_t, float("-inf")) if self.use_action_masking else q_logits
                 )
                 imitation_loss = self.imitation_loss_fn(q_for_imitation, expert_actions_t)
-                total_loss = loss + (imitation_weight * imitation_loss)
+                total_loss = loss + (self.expert_bias_weight * imitation_loss)
             else:
                 total_loss = loss
 
@@ -479,13 +480,12 @@ class DoubleDQNAgent(DQNAgent):
             # Imitation Loss / Expert Bias (Masking Optional)
             if self.use_expert_bias and self.imitation_loss_fn is not None:
                 expert_actions_t = self._to_device_tensor(expert_actions, dtype=torch.long)
-                imitation_weight = 0.1 * float(self.epsilon)
 
                 q_for_imitation = (
                     q_logits.masked_fill(~action_masks_t, float("-inf")) if self.use_action_masking else q_logits
                 )
                 imitation_loss = self.imitation_loss_fn(q_for_imitation, expert_actions_t)
-                total_loss = loss + (imitation_weight * imitation_loss)
+                total_loss = loss + (self.expert_bias_weight * imitation_loss)
             else:
                 total_loss = loss
 

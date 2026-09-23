@@ -42,7 +42,7 @@ def get_model_filename(
     )
 
 
-def initialize_dqn_agent(env, agent_cls, hyperparams) -> Any:
+def initialize_agent(env, agent_cls, hyperparams) -> Any:
     """Instantiates the specified neural agent class using dimensions from the environment."""
     fleet_dim, flight_feature_dim = env.get_state_dim()
     return agent_cls(
@@ -59,6 +59,7 @@ def initialize_dqn_agent(env, agent_cls, hyperparams) -> Any:
         hidden_dim=int(hyperparams.get("hidden_dim", 256)),
         use_attention=bool(hyperparams.get("use_attention", True)),
         use_expert_bias=bool(hyperparams.get("use_expert_bias", False)),
+        expert_bias_weight=float(hyperparams.get("expert_bias_weight", 0.1)),
         use_action_masking=bool(hyperparams.get("use_action_masking", True)),
     )
 

@@ -7,6 +7,8 @@ requires-python = ">=3.11"
 dependencies = [
     "airportsdata>=20260315",
     "black>=26.1.0",
+    "cplex>=22.2.0.1",
+    "docplex>=2.32.264",
     "geopy>=2.4.1",
     "isort>=7.0.0",
     "matplotlib>=3.11.0",
@@ -24,6 +26,17 @@ dev = [
 
 [tool.ruff]
 line-length = 120
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+skip-magic-trailing-comma = false
 
 [tool.ruff.lint]
 extend-select = ["F", "I"]
+
+[tool.black]
+line-length = 120
+target-version = ["py311"]

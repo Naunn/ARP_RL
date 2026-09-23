@@ -200,8 +200,8 @@ class AirlineEnv:
         arrival_at_dest = actual_start + (flight_dist / (p_cfg["speed"] / 60))
 
         # Financial balance computations
-        served_ratio = min(1.0, float(p_cfg["seats"]) / max(1.0, float(f.get("pass", 1))))
-        revenue = float(f.get("total_ticket_price", 0.0)) * served_ratio
+        # served_ratio = min(1.0, float(p_cfg["seats"]) / max(1.0, float(f.get("pass", 1))))
+        revenue = float(f.get("total_ticket_price", 0.0))  # * served_ratio
         operating_cost = float(p_cfg.get("hourly_cost", 0.0)) * (
             ((reloc_dist + flight_dist) / (p_cfg["speed"] / 60)) / 60
         )
@@ -255,7 +255,7 @@ class AirlineEnv:
                 "revenue": revenue,
                 "delay_minutes": delay_minutes,
                 "delay_penalty": delay_penalty,
-                "served_ratio": served_ratio,
+                # "served_ratio": served_ratio,
                 "capacity_slack_penalty": capacity_slack_penalty,
                 "relocation_penalty": relocation_penalty,
             },

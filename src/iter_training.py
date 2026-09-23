@@ -25,7 +25,7 @@ from src.utils import (
     build_planes,
     create_dist_dict_from_airports,
     get_model_filename,
-    initialize_dqn_agent,
+    initialize_agent,
     log_iteration_start,
     logger,
     reset_agent_exploration,
@@ -100,8 +100,8 @@ dummy_env = AirlineEnv(
 )
 
 setup_checkpoint_dir()
-dqn_agent = initialize_dqn_agent(dummy_env, DQNAgent, MODEL_HYPERPARAMS["DQN"])
-double_dqn_agent = initialize_dqn_agent(dummy_env, DoubleDQNAgent, MODEL_HYPERPARAMS["DOUBLE_DQN"])
+dqn_agent = initialize_agent(dummy_env, DQNAgent, MODEL_HYPERPARAMS["DQN"])
+double_dqn_agent = initialize_agent(dummy_env, DoubleDQNAgent, MODEL_HYPERPARAMS["DOUBLE_DQN"])
 
 meta_dims = (len(FLIGHTS), len(AIRPORTS), len(PLANES))
 

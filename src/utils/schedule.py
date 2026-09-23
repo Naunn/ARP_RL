@@ -153,7 +153,3 @@ def build_flight_pool(flights_df: pd.DataFrame, itineraries_df: pd.DataFrame):
         )
 
     return pool
-
-
-# TODO: boxplot zamiast
-# TODO: nagroda za revenue jest w sumie bez sensu

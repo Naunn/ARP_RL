@@ -42,7 +42,7 @@ PLANES_TEMPLATES: Dict[str, Dict[str, Any]] = {
     },
 }
 
-N_ITERATIONS: int = 10
+N_ITERATIONS: int = 100
 
 # --- STRUCTURAL CONFIGURATIONS ---
 MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
@@ -56,7 +56,8 @@ MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
         "tau": 0.001,
         "use_attention": True,
         "use_expert_bias": True,
-        "use_action_masking": True,
+        "expert_bias_weight": 0.05,
+        "use_action_masking": False,
     },
     "DOUBLE_DQN": {
         "lr": 0.0005,
@@ -68,13 +69,14 @@ MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
         "tau": 0.001,
         "use_attention": True,
         "use_expert_bias": True,
-        "use_action_masking": True,
+        "expert_bias_weight": 0.05,
+        "use_action_masking": False,
     },
 }
 
 MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
-    "DQN": {"n_episodes": 300, "log_interval": 100},
-    "DOUBLE_DQN": {"n_episodes": 300, "log_interval": 100},
+    "DQN": {"n_episodes": 500, "log_interval": 10},
+    "DOUBLE_DQN": {"n_episodes": 500, "log_interval": 10},
 }
 
 RL_TRAINING_CONFIG: Dict[str, float] = {
