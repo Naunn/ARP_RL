@@ -65,12 +65,3 @@ def log_early_stop(episode_num: int, total_episodes: int, patience: int, best_ro
         f"\n[EARLY STOP] Terminated at Episode {episode_num}/{total_episodes}. "
         f"No improvement for {patience} episodes. Final policy rolling average: ${best_rolling_profit:,.0f}."
     )
-
-
-def log_feasibility(iteration: int, utilization: float, max_req_planes: int, num_planes: int):
-    logger.info(f"Schedule Iteration {iteration} Feasibility:")
-    logger.info(f"Global Utilization: {utilization:.1f}% | Peak Concurrency: {max_req_planes} planes")
-    if max_req_planes > num_planes or utilization > 100:
-        logger.warning("Status: CURRENT ENVIRONMENT IS UNSOLVABLE - Triage mode active.")
-    else:
-        logger.info("Status: ENVIRONMENT IS SOLVABLE.")

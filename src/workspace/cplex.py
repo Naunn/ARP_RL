@@ -9,10 +9,9 @@ from docplex.mp.model import Model
 
 from src.agents.dqn_agent import DoubleDQNAgent
 from src.config import MODEL_HYPERPARAMS, MODEL_TRAINING_PARAMS, REWARD_CONFIG
+from src.instances import build_flight_pool, build_planes, generate_random_flights
 from src.utils.dist import create_dist_dict_from_airports
 from src.utils.envs import AirlineEnv
-from src.utils.fleet import build_planes
-from src.utils.schedule import build_flight_pool, generate_random_flights
 from src.utils.training_engine import initialize_agent, reset_agent_exploration, train_dqn_iteration
 
 SCRIPT_DIR = str(Path.cwd())  # str(Path(__file__).resolve().parent)

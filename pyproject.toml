@@ -1,21 +1,24 @@
 [project]
 name = "simple-arp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Expert-guided DQN / Double DQN for airline aircraft-to-flight assignment and disruption recovery (ROADEF2009)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "airportsdata>=20260315",
-    "black>=26.1.0",
-    "cplex>=22.2.0.1",
-    "docplex>=2.32.264",
     "geopy>=2.4.1",
-    "isort>=7.0.0",
     "matplotlib>=3.11.0",
     "numpy>=2.4.2",
     "pandas>=3.0.0",
     "scipy>=1.17.1",
     "torch>=2.11.0",
+]
+
+[project.optional-dependencies]
+# Exact MILP baseline (src/workspace/cplex.py): `uv sync --extra cplex`
+cplex = [
+    "cplex>=22.2.0.1",
+    "docplex>=2.32.264",
 ]
 
 [dependency-groups]
@@ -36,7 +39,3 @@ skip-magic-trailing-comma = false
 
 [tool.ruff.lint]
 extend-select = ["F", "I"]
-
-[tool.black]
-line-length = 120
-target-version = ["py311"]

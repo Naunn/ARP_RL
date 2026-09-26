@@ -1,48 +1,11 @@
 """Central application configurations for reinforcement learning airline schedules."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-# --- ENVIRONMENT SEED DATA ---
-CITIES: List[str] = [
-    "praga",
-    "milan",
-    "lodz",
-    "paris",
-    "madryt",
-    "berlin",
-    "london",
-    "barcelona",
-    "qatar",
-    "dubai",
-]
+# Global RNG seed applied by every experiment via src.utils.set_seed, so reruns are reproducible.
+SEED: int = 42
 
-AIRPORTS: List[str] = ["lodz", "berlin", "barcelona"]
-
-N_FLIGHTS: int = 10
-N_EVAL_FLIGHTS: int = N_FLIGHTS * 5
-FIRST_FLIGHT_HOUR: int = 5
-LAST_FLIGHT_HOUR: int = 23
-MIN_PASS: int = 100
-MAX_PASS: int = 180
-
-PLANES_TEMPLATES: Dict[str, Dict[str, Any]] = {
-    "BOEING": {
-        "fuel_use": 900.0,
-        "seats": 150,
-        "speed": 900,
-        "base_fare": 50,
-        "rate_per_km": 0.15,
-    },
-    "AIRBUS": {
-        "fuel_use": 850.0,
-        "seats": 120,
-        "speed": 850,
-        "base_fare": 120,
-        "rate_per_km": 0.28,
-    },
-}
-
-N_ITERATIONS: int = 100
+N_ITERATIONS: int = 5
 
 # --- STRUCTURAL CONFIGURATIONS ---
 MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
@@ -79,6 +42,31 @@ MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
     "DOUBLE_DQN": {"n_episodes": 500, "log_interval": 10},
 }
 
+# Ablation variants compared across experiments: each maps to hyperparameter overrides applied
+# on top of MODEL_HYPERPARAMS[algo]. "full" is the base config (no overrides). Order here is the
+# order variants are trained/displayed in.
+AGENT_VARIANT_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    "full": {},
+    "no_bias": {
+        "use_expert_bias": False,
+        "use_action_masking": False,
+    },
+    "idle": {
+        "use_attention": False,
+        "use_expert_bias": False,
+        "use_action_masking": False,
+    },
+}
+
+# Severity parameters for the synthetic disruptions injected during disruption-recovery training.
+DISRUPTION_ACTIONS_CONFIG: Dict[str, Any] = {
+    "delay_count_fraction": 1 / 3,  # fraction of flights delayed, e.g. N // 3
+    "delay_min_minutes": 60,
+    "delay_max_minutes": 180,
+    "replace_airport_field": "origin",
+    "replace_airport_method": "closest",
+}
+
 RL_TRAINING_CONFIG: Dict[str, float] = {
     "dqn_reward_scale": 0.001,
 }
@@ -97,5 +85,5 @@ EARLY_STOPPING_CONFIG: Dict[str, Any] = {
     "min_epsilon_to_stop": 0.02,
 }
 
-CHECKPOINT_DIR: str = "checkpoints"
-FLEET_CONFIG: Dict[str, int] = {"BOEING": 2, "AIRBUS": 2}
+# Every experiment run writes its config, log, results, and checkpoints to RUNS_DIR/<run_id>/.
+RUNS_DIR: str = "runs"

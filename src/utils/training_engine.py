@@ -1,14 +1,13 @@
 """Computational reinforcement learning training loop engines and weight serialization hooks."""
 
-import os
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
 from src.config import (
-    CHECKPOINT_DIR,
     EARLY_STOPPING_CONFIG,
     MODEL_TRAINING_PARAMS,
     RL_TRAINING_CONFIG,
@@ -17,28 +16,21 @@ from src.utils.envs import ClosestPlaneGreedySolver
 from src.utils.logging import log_checkpoint, log_early_stop, log_progress, logger
 
 
-def setup_checkpoint_dir():
-    """Ensures directories for historical weights exist."""
-    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-
-
 def get_model_filename(
+    checkpoint_dir: Path,
     iteration: int,
     flights_count: int,
     cities_count: int,
     fleet_size: int,
     episodes: int,
     model_tag: str = "DQN",
-) -> str:
-    """Generates a standardized, sortable filename path for historical weights tracking."""
-    return os.path.join(
-        CHECKPOINT_DIR,
-        (
-            f"{model_tag.upper().replace(' ', '_')}_airline_"
-            f"episodes{episodes}_flights{flights_count}_"
-            f"cities{cities_count}_fleet{fleet_size}_"
-            f"iter{iteration:03d}.pth"
-        ),
+) -> Path:
+    """Standardized, sortable checkpoint path inside `checkpoint_dir` (normally a run's checkpoints/)."""
+    return checkpoint_dir / (
+        f"{model_tag.upper().replace(' ', '_')}_airline_"
+        f"episodes{episodes}_flights{flights_count}_"
+        f"cities{cities_count}_fleet{fleet_size}_"
+        f"iter{iteration:03d}.pth"
     )
 
 
@@ -118,8 +110,13 @@ def train_dqn_iteration(
     model_name: str = "DQN",
     training_name: str | None = None,
     verbose: bool = True,
+    checkpoint_dir: Path | None = None,
 ) -> list[float]:
-    """Runs a complete generational training lifecycle iteration containing n_episodes."""
+    """Runs one training iteration of n_episodes; returns the per-episode rewards.
+
+    If checkpoint_dir is given, the best rolling-average policy (once epsilon is low enough) is
+    saved there as best_<model>_iterNNN.pth.
+    """
     scores = []
     start_time = time.time()
     log_interval: int = MODEL_TRAINING_PARAMS[model_name]["log_interval"]
@@ -141,13 +138,11 @@ def train_dqn_iteration(
             if current_rolling > (best_rolling_profit + cfg["improvement_threshold"]):
                 best_rolling_profit = current_rolling
                 patience_counter = 0
-                if agent.epsilon <= cfg["min_epsilon_to_stop"]:
+                if checkpoint_dir is not None and agent.epsilon <= cfg["min_epsilon_to_stop"]:
                     torch.save(
                         agent.policy_net.state_dict(),
-                        f"checkpoints/best_{model_name.lower()}_iter{iteration:03d}.pth",
+                        checkpoint_dir / f"best_{model_name.lower()}_iter{iteration:03d}.pth",
                     )
-                    # We usually KEEP checkpoint logs even if verbose=False
-                    # so you know a model saved, but you can wrap this if you want absolute silence
                     log_checkpoint(best_rolling_profit, ep)
             elif agent.epsilon <= cfg["min_epsilon_to_stop"]:
                 patience_counter += 1

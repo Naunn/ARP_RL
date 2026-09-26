@@ -30,7 +30,6 @@ class AirlineEnv:
         self.flight_window_size = max(1, int(flight_window_size))
         take_offs = [p["start"] for p in self.flights]
         self.operation_time = max(take_offs) - min(take_offs)
-        self.default_hub = "lodz"
 
         # Pre-calculate invariant data extensions to avoid loop costs
         planes_seats = [config["seats"] for config in self.plane_configs.values()]
@@ -42,22 +41,47 @@ class AirlineEnv:
         self.max_fixed_cost = max(config.get("fixed_cost", 0.0) for config in self.plane_configs.values())
         self.max_reloc_dist = max(dist_dict.values()) if dist_dict else 1.0
 
-        plane_starts = [cfg.get("initial_airport", self.default_hub) for cfg in self.plane_configs.values()]
-        self.cities = sorted(list(set(cities + plane_starts + [self.default_hub])))
+        plane_starts = [cfg["initial_airport"] for cfg in self.plane_configs.values()]
+        self.cities = sorted(set(cities) | set(plane_starts))
         self.city_to_idx = {city: i for i, city in enumerate(self.cities)}
         self.num_cities = len(self.cities)
 
         # Pre-build structural identity mapping matrices for ultra-fast one-hot vector lookups
         self.city_one_hot_eye = np.eye(self.num_cities, dtype=np.float32)  # identity matrix
 
+        # Dense copy of dist_dict for vectorized per-plane lookups. Missing pairs (and cities absent
+        # from both the instance and dist_dict, mapped to the extra last slot) keep the 500 km
+        # default that dist_dict.get(..., 500) uses elsewhere in this class.
+        dist_cities = sorted(set(self.cities) | {a for a, _ in dist_dict} | {b for _, b in dist_dict})
+        self._dist_idx = {city: i for i, city in enumerate(dist_cities)}
+        self._unknown_city_idx = len(dist_cities)
+        self._dist_matrix = np.full((len(dist_cities) + 1, len(dist_cities) + 1), 500.0)
+        for (origin, dest), dist in dist_dict.items():
+            self._dist_matrix[self._dist_idx[origin], self._dist_idx[dest]] = dist
+
+        self.plane_seats = np.array([float(self.plane_configs[p]["seats"]) for p in self.planes])
+        self._plane_speed_per_min = np.array([self.plane_configs[p]["speed"] / 60 for p in self.planes])
+
         self.reset()
 
     def reset(self) -> tuple[tuple[float, ...], tuple[str, ...], int]:
         self.current_f_idx = 0
         self.times = tuple([0.0] * len(self.planes))
-        self.locs = tuple([self.plane_configs[p].get("initial_airport", self.default_hub) for p in self.planes])
+        self.locs = tuple([self.plane_configs[p]["initial_airport"] for p in self.planes])
         self.used_planes = tuple([False] * len(self.planes))
         return (self.times, self.locs, self.current_f_idx)
+
+    def relocation_estimates(self, times, locs, flight) -> tuple[np.ndarray, np.ndarray]:
+        """Per-plane relocation distance to `flight`'s origin and earliest feasible start time."""
+        loc_idx = np.fromiter(
+            (self._dist_idx.get(loc, self._unknown_city_idx) for loc in locs), dtype=np.int64, count=len(locs)
+        )
+        origin_idx = self._dist_idx.get(flight["origin"], self._unknown_city_idx)
+        reloc_dist = self._dist_matrix[loc_idx, origin_idx]
+        actual_start = np.maximum(
+            flight["start"], np.asarray(times, dtype=np.float64) + reloc_dist / self._plane_speed_per_min
+        )
+        return reloc_dist, actual_start
 
     def reset_with_schedule(self, new_flights) -> tuple[tuple[float, ...], tuple[str, ...], int]:
         """Swaps the current operational flight queue mapping layout structures cleanly."""
@@ -153,37 +177,16 @@ class AirlineEnv:
             return np.ones(n_actions, dtype=np.bool_)
 
         f = self.flights[f_idx]
-        required_seats = float(f.get("pass", 0.0))
 
-        mask = np.zeros(n_actions, dtype=np.bool_)
-        best_capacity = float("-inf")
-        best_delay = float("inf")
-        fallback_idx = 0
+        # Legal actions are capacity-feasible; delay is handled by reward shaping.
+        mask = self.plane_seats >= float(f.get("pass", 0.0))
 
-        for idx, p_name in enumerate(self.planes):
-            p_cfg = self.plane_configs[p_name]
-            seats = float(p_cfg.get("seats", 0.0))
-
-            reloc_dist = self.dist_dict.get((locs[idx], f["origin"]), 500)
-            actual_start = max(
-                f["start"],
-                times[idx] + (reloc_dist / (p_cfg["speed"] / 60)),
-            )
-            delay = max(0.0, actual_start - f["start"])
-
-            # Legal actions are capacity-feasible; delay is handled by reward shaping.
-            if seats >= required_seats:
-                mask[idx] = True
-
-            # Tracking fallback if ALL planes are filtered out
-            if (seats > best_capacity) or (seats == best_capacity and delay < best_delay):
-                best_capacity = seats
-                best_delay = delay
-                fallback_idx = idx
-
-        # Fallback: If no planes meet capacity + threshold, fall back to the single best available plane
+        # Fallback when no plane is big enough: the largest plane, ties broken by least delay.
         if not mask.any():
-            mask[fallback_idx] = True
+            _, actual_start = self.relocation_estimates(times, locs, f)
+            delay = np.maximum(0.0, actual_start - f["start"])
+            largest = self.plane_seats == self.plane_seats.max()
+            mask[int(np.argmin(np.where(largest, delay, np.inf)))] = True
 
         return mask
 
@@ -278,36 +281,14 @@ class ClosestPlaneGreedySolver(BaseSolver):
 
     def choose_action(self, state, env: AirlineEnv) -> int:
         f = env.flights[env.current_f_idx]
-        required_seats = float(f.get("pass", 1))
+        reloc_dist, actual_start = env.relocation_estimates(env.times, env.locs, f)
+        waste = (actual_start - f["start"]) + reloc_dist / 100.0
 
-        best_action = 0
-        min_waste = float("inf")
-
-        # Track a fallback plane in case NO aircraft has enough seats for this flight
-        fallback_action = 0
-        fallback_min_waste = float("inf")
-
-        for idx, p_name in enumerate(env.planes):
-            p_cfg = env.plane_configs[p_name]
-            reloc_dist = env.dist_dict.get((env.locs[idx], f["origin"]), 500)
-
-            actual_start_possible = max(f["start"], env.times[idx] + (reloc_dist / (p_cfg["speed"] / 60)))
-            total_waste_score = (actual_start_possible - f["start"]) + (reloc_dist / 100.0)
-
-            # Check capacity constraint
-            if float(p_cfg["seats"]) >= required_seats:
-                # This plane is big enough! Optimize over these first.
-                if total_waste_score < min_waste:
-                    min_waste = total_waste_score
-                    best_action = idx
-            else:
-                # Fallback path if no planes are large enough
-                if total_waste_score < fallback_min_waste:
-                    fallback_min_waste = total_waste_score
-                    fallback_action = idx
-
-        # If we found at least one plane that meets capacity, use it. Otherwise, use the best fallback.
-        return best_action if min_waste != float("inf") else fallback_action
+        # Least-waste plane among those with enough seats; if none has enough, least-waste overall.
+        capable = env.plane_seats >= float(f.get("pass", 1))
+        if capable.any():
+            waste = np.where(capable, waste, np.inf)
+        return int(np.argmin(waste))
 
 
 class DQNSolver(BaseSolver):
@@ -323,23 +304,19 @@ class DQNSolver(BaseSolver):
         )
 
 
-class QLearningSolver(BaseSolver):
-    def __init__(self, agent):
-        self.agent = agent
-
-    def choose_action(self, state, env: AirlineEnv) -> int:
-        return self.agent.choose_action((env.times, env.locs, env.current_f_idx), use_epsilon=False)
-
-
 # --- CONSOLIDATED CROSS-VALIDATION UNIFIED TESTING STAGE ENGINE ---
 def run_unified_execution(
     env: AirlineEnv,
     solver: BaseSolver,
     flights: list,
     solver_name: str = "SOLVER",
-    verbose: bool = True,
+    verbose: bool = False,
 ) -> tuple[float, float]:
+    """Runs `solver` over the full schedule and returns (total_profit, total_delay_minutes).
 
+    verbose=True logs a line per flight -- useful for inspecting a small instance, but slow and
+    very noisy on ROADEF-sized ones, hence off by default.
+    """
     # Wrap the header logs
     if verbose:
         logger.info(f"\n{'=' * 30} {solver_name.upper()} EXECUTION {'=' * 30}")

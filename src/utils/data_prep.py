@@ -51,9 +51,16 @@ DATA_COLUMNS = {
     },
 }
 
-# Fixed family-level average cruise speeds in km/h.
+# Fixed family-level average cruise speeds in km/h. The A-scale ROADEF instances use "Airbus";
+# the larger B-scale instances split fleets into Big/Small Airbus and Boeing variants instead --
+# both need entries here or those aircraft silently get speed=NaN (caught while wiring up
+# src.instances.roadef against the B instances; A-only usage never exercised these families).
 FAMILY_AVG_SPEED_KMH = {
     "Airbus": 840,
+    "AirbusBig": 880,
+    "AirbusSmall": 830,
+    "BoeingBig": 880,
+    "BoeingSmall": 830,
     "BAE": 750,
     "CRJ": 810,
     "ERJ": 830,
@@ -117,9 +124,7 @@ def read_itineraries(file_path: str | Path) -> pd.DataFrame:
     )
 
 
-def load_all_clean_data(
-    flights_p, dist_p, itineraries_p, aircraft_p
-) -> dict[str, pd.DataFrame]:
+def load_all_clean_data(flights_p, dist_p, itineraries_p, aircraft_p) -> dict[str, pd.DataFrame]:
     flights = read_legacy_table(flights_p, DATA_COLUMNS["flights"]["load"])
     dist = read_legacy_table(dist_p, DATA_COLUMNS["dist"]["load"])
     aircraft = read_legacy_table(aircraft_p, DATA_COLUMNS["aircraft"]["load"])
@@ -128,15 +133,9 @@ def load_all_clean_data(
     flights["flight_id"] = flights["flight_id"].astype(int)
     flights["start_min"] = flights["departure"].map(parse_time_to_minutes)
     flights["arrival_min"] = flights["arrival"].map(parse_time_to_minutes)
-    flights["duration_min"] = (flights["arrival_min"] - flights["start_min"]).clip(
-        lower=0
-    )
+    flights["duration_min"] = (flights["arrival_min"] - flights["start_min"]).clip(lower=0)
 
-    aircraft["seats"] = (
-        aircraft["capacities"]
-        .astype(str)
-        .apply(lambda x: sum(int(part) for part in x.split("/")))
-    )
+    aircraft["seats"] = aircraft["capacities"].astype(str).apply(lambda x: sum(int(part) for part in x.split("/")))
     aircraft["speed"] = aircraft["family"].map(FAMILY_AVG_SPEED_KMH)
 
     return {
@@ -162,9 +161,13 @@ def save_dataframes(data_dict: dict[str, pd.DataFrame], output_dir: str | Path):
 
 
 if __name__ == "__main__":
-    DATA_DIR = Path("/home/bartosz/repos/ARP_RL/data/A1_6088570/A01_6088570")
-    # Setting target save directory to data/training/ relative to your project base
-    OUTPUT_DIR = Path("data/training/")
+    # Regenerates data/training/*.csv (the fixed single-instance CSV export several experiment
+    # scripts sample from) from the raw ROADEF A01 instance. For loading any ROADEF instance
+    # (including the larger B-scale ones) directly, without this export step, use
+    # src.instances.roadef.load_roadef_instance instead.
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+    DATA_DIR = PROJECT_ROOT / "data" / "A1_6088570" / "A01_6088570"
+    OUTPUT_DIR = PROJECT_ROOT / "data" / "training"
 
     dfs = load_all_clean_data(
         flights_p=DATA_DIR / "flights.csv",

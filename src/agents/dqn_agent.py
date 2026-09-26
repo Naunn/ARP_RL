@@ -99,16 +99,35 @@ class AttentionPoolingQNetwork(nn.Module):
 
 
 class ReplayBuffer:
-    """Prioritized experience replay buffer."""
+    """Prioritized experience replay buffer backed by preallocated numpy arrays (one per field).
+
+    Storage is allocated on the first push, once the state shapes are known. Sampling is plain
+    fancy indexing into those arrays, instead of rebuilding a batch from a list of tuples.
+    """
+
+    # (field name, numpy dtype) in the order push() receives and sample() returns them.
+    _FIELDS = (
+        ("fleet", np.float32),
+        ("flights", np.float32),
+        ("action", np.int64),
+        ("reward", np.float32),
+        ("next_fleet", np.float32),
+        ("next_flights", np.float32),
+        ("done", np.float32),
+        ("action_mask", np.bool_),
+        ("next_action_mask", np.bool_),
+        ("expert_action", np.int64),
+    )
 
     def __init__(self, capacity=20000, alpha=0.4, beta=0.4, beta_increment=5e-5):
         self.capacity = capacity
         self.alpha = alpha
         self.beta = beta
         self.beta_increment = beta_increment
-        self.buffer = []
         self.priorities = np.zeros(capacity, dtype=np.float32)
         self.position = 0
+        self.size = 0
+        self._storage: dict[str, np.ndarray] = {}
 
     def push(
         self,
@@ -123,7 +142,7 @@ class ReplayBuffer:
         next_action_mask,
         expert_action,
     ):
-        transition = (
+        values = (
             fleet_state,
             flight_matrix,
             action,
@@ -135,62 +154,37 @@ class ReplayBuffer:
             next_action_mask,
             expert_action,
         )
+        if not self._storage:
+            # np.zeros is lazily backed by the OS, so untouched capacity costs no real memory.
+            for (name, dtype), value in zip(self._FIELDS, values):
+                self._storage[name] = np.zeros((self.capacity, *np.shape(value)), dtype=dtype)
 
-        max_priority = self.priorities.max() if self.buffer else 1.0
+        for (name, _), value in zip(self._FIELDS, values):
+            self._storage[name][self.position] = value
 
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(transition)
-        else:
-            self.buffer[self.position] = transition
-
-        self.priorities[self.position] = max_priority
+        self.priorities[self.position] = self.priorities.max() if self.size else 1.0
         self.position = (self.position + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size):
-        priorities = self.priorities[: len(self.buffer)]
-        scaled_priorities = priorities**self.alpha
+        scaled_priorities = self.priorities[: self.size] ** self.alpha
         sampling_probabilities = scaled_priorities / scaled_priorities.sum()
 
-        indices = np.random.choice(len(self.buffer), batch_size, p=sampling_probabilities)
-        samples = [self.buffer[idx] for idx in indices]
+        indices = np.random.choice(self.size, batch_size, p=sampling_probabilities)
 
-        weights = (len(self.buffer) * sampling_probabilities[indices]) ** (-self.beta)
+        weights = (self.size * sampling_probabilities[indices]) ** (-self.beta)
         weights /= weights.max()
         self.beta = min(1.0, self.beta + self.beta_increment)
 
-        fleet_b = np.array([s[0] for s in samples], dtype=np.float32)
-        flights_b = np.array([s[1] for s in samples], dtype=np.float32)
-        action_b = np.array([s[2] for s in samples], dtype=np.int64)
-        reward_b = np.array([s[3] for s in samples], dtype=np.float32)
-        next_fleet_b = np.array([s[4] for s in samples], dtype=np.float32)
-        next_flights_b = np.array([s[5] for s in samples], dtype=np.float32)
-        done_b = np.array([s[6] for s in samples], dtype=np.float32)
-        action_mask_b = np.array([s[7] for s in samples], dtype=np.bool_)
-        next_action_mask_b = np.array([s[8] for s in samples], dtype=np.bool_)
-        expert_action_b = np.array([s[9] for s in samples], dtype=np.int64)
-
-        return (
-            indices,
-            weights.astype(np.float32),
-            fleet_b,
-            flights_b,
-            action_b,
-            reward_b,
-            next_fleet_b,
-            next_flights_b,
-            done_b,
-            action_mask_b,
-            next_action_mask_b,
-            expert_action_b,
-        )
+        batch = tuple(self._storage[name][indices] for name, _ in self._FIELDS)
+        return (indices, weights.astype(np.float32), *batch)
 
     def __len__(self):
-        return len(self.buffer)
+        return self.size
 
     def update_priorities(self, indices, priorities):
-        for idx, priority in zip(indices, priorities):
-            priority = float(np.nan_to_num(priority, nan=1.0, posinf=1.0, neginf=1.0))
-            self.priorities[idx] = max(priority, 1e-6)
+        priorities = np.nan_to_num(np.asarray(priorities, dtype=np.float64), nan=1.0, posinf=1.0, neginf=1.0)
+        self.priorities[indices] = np.maximum(priorities, 1e-6)
 
 
 class DQNAgent:

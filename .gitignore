@@ -13,3 +13,6 @@ wheels/
 *.log
 
 checkpoints/
+
+# Per-run experiment outputs (config, log, results, checkpoints) -- see src/experiments/run_tracking.py
+runs/
