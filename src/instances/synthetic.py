@@ -13,36 +13,36 @@ def generate_random_flights(n, cities, start_time_range, pass_range):
     :param n: Number of flights to generate.
     :param cities: List of available city names.
     :param start_time_range: Tuple (min_start, max_day_time)
-                             e.g., (600, 1440) for 10:00 to 24:00.
+                            e.g., (600, 1440) for 10:00 to 24:00.
     :param pass_range: Tuple (min_pass, max_pass) e.g., (10, 150).
     :return: List of flight dictionaries sorted by start time.
     """
     generated_flights = []
 
     # We start with the minimum allowed time
-    current_time = start_time_range[0]
+    min_time = start_time_range[0]
     max_time = start_time_range[1]
 
     for i in range(1, n + 1):
         # Ensure origin and destination are not the same
         origin, dest = random.sample(cities, 2)
 
-        # Ensure start time is not smaller than previous
-        # We add a random gap (0 to 60 mins) to make it realistic
-        current_time = random.randint(current_time, min(current_time + 60, max_time))
+        # uniformly sample a start time within the allowed range
+        start_time = random.randint(min_time, max_time)
 
         flight = {
-            "id": 100 + i,  # Format like 101, 102, etc.
+            "id": 000,
             "origin": origin,
             "dest": dest,
-            "start": current_time,
+            "start": start_time,
             "pass": random.randint(pass_range[0], pass_range[1]),
         }
         generated_flights.append(flight)
 
     # Though generated in order, we sort just to be safe for the RL environment
     generated_flights.sort(key=lambda x: x["start"])
-    return generated_flights
+    for i, flight in enumerate(generated_flights, start=100):
+        flight["id"] = i
 
 
 def generate_trap_schedule(n, cities, start_time_range, pass_range):
