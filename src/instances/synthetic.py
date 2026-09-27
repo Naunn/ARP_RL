@@ -44,21 +44,12 @@ def generate_random_flights(n, cities, start_time_range, pass_range):
     for i, flight in enumerate(generated_flights, start=100):
         flight["id"] = i
 
+    return generated_flights
+
 
 def generate_trap_schedule(n, cities, start_time_range, pass_range):
     # Generate base random flight pool
-    flights = []
-    for i in range(n):
-        orig, dest = random.sample(cities, 2)
-        flights.append(
-            {
-                "id": 101 + i,
-                "origin": orig,
-                "dest": dest,
-                "start": random.randint(*start_time_range),
-                "pass": random.randint(*pass_range),
-            }
-        )
+    flights = generate_random_flights(n, cities, start_time_range, pass_range)
 
     # Dynamic Trap Injection (No hardcoded array indices)
     # Group flights into Early (Yield Trap) and Late (Concurrency Trap) windows
@@ -68,9 +59,12 @@ def generate_trap_schedule(n, cities, start_time_range, pass_range):
     for i, f in enumerate(flights):
         # Force the first ~20% of flights into a high-capacity hub-to-hub trap
         if i < max(2, int(n * 0.2)):
-            f["origin"], f["dest"] = cities[0], cities[1]
+            random_direction = random.sample([cities[0], cities[1]], 2)
+            f["origin"], f["dest"] = random_direction[0], random_direction[1]
             f["start"] = random.randint(t_min + 30, t_min + 200)
-            f["pass"] = int(pass_range[1] * 0.95)
+            f["pass"] = int(
+                random.randint(pass_range[0], pass_range[1]) * 1.5
+            )  # Increase passenger count to simulate congestion
 
         # Force the last ~40% of flights to cluster simultaneously at the end
         elif i >= n - max(3, int(n * 0.4)):
