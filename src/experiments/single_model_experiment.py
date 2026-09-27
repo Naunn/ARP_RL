@@ -62,7 +62,7 @@ INSTANCE_NAME = "A01_6088570"
 #   "sample" -- MAX_FLIGHTS flights sampled from the instance's real schedule
 #   "random" -- MAX_FLIGHTS synthetic flights between N_CITIES of the instance's airports
 #   "trap"   -- like "random", plus an early hub-to-hub rush and a late concurrency bottleneck
-SCHEDULE_TYPE = "random"
+SCHEDULE_TYPE = "sample"
 N_CITIES = 4  # "random"/"trap" only: how many of the instance's airports the flights use (trap needs >= 3)
 
 # Downsize for a faster dev loop -- set either to None to use the full instance's count instead.

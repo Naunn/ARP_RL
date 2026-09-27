@@ -11,11 +11,13 @@ Tabulate recovery with `python -m src.analysis.disruption_recovery_table`.
 
 from typing import Any, Dict, List, cast
 
-import numpy as np
-import pandas as pd
-
-from src.config import N_ITERATIONS, REWARD_CONFIG
-from src.config import SEED as DEFAULT_SEED
+from src.config import N_ITERATIONS as DEFAULT_N_DISRUPTIONS
+from src.config import (
+    REWARD_CONFIG,
+)
+from src.config import (  # noqa: F401  (kept for switching SEED back)
+    SEED as DEFAULT_SEED,
+)
 from src.experiments.experiment_setup import (
     build_disruption_actions,
     build_variant_agents,
@@ -24,29 +26,42 @@ from src.experiments.experiment_setup import (
     train_agents_on_schedule,
 )
 from src.experiments.run_tracking import start_run
-from src.instances import build_flight_pool, build_planes, generate_trap_schedule
-from src.utils import (
-    DisruptionGenerator,
-    create_dist_dict_from_airports,
-    log_section,
-    log_subsection,
-    logger,
-    set_seed,
+from src.instances import (
+    build_schedule,
+    discover_roadef_instances,
+    load_roadef_instance,
 )
+from src.utils import DisruptionGenerator, log_section, log_subsection, logger, set_seed
 from src.utils.envs import AirlineEnv
 
-# int -> reproducible (same schedules/results every rerun); None -> fresh seed, i.e. genuinely new
-# schedules every run (the seed used is still saved in the run's config.json).
-SEED = DEFAULT_SEED
+# ============================================================================
+# WHAT TO RUN
+# ============================================================================
 
-# Which ablation variants/algorithms this run trains and compares. See src.config.AGENT_VARIANT_OVERRIDES.
-ACTIVE_ALGOS = ["DQN", "DOUBLE_DQN"]
-ACTIVE_VARIANTS = ["full", "no_bias", "idle"]
+# int -> reproducible (same schedules/disruptions/results every rerun); None -> fresh seed, i.e.
+# genuinely new schedules every run (the seed used is still saved in the run's config.json).
+SEED = None  # DEFAULT_SEED
 
-N_RUNS = 1  # independent instances, each put through the full train -> disrupt/retrain cycle
-N = 15  # 15 for testing random + trap (100 iter); round(flights_df.shape[0]/3) for sampled - too long for 100 iter :(
-C_N = 3  # 3 for testing random + trap (100 iter); for sampled does not matter
-P_N = 2  # 2 for testing random + trap (100 iter); round(aircraft_df.shape[0]/3) for sampled - too long for 100 iter :(
+# ROADEF instance the fleet, distances, and (for synthetic schedules) airports/fares come from:
+# A01_6088570..A10_6088590 (~600 flights/84 aircraft) or B_01..B_10 (~1400 flights/255 aircraft).
+INSTANCE_NAME = "A01_6088570"
+
+# "sample" (real flights) / "random" / "trap" -- see src/instances/scenarios.py
+SCHEDULE_TYPE = "random"
+N_CITIES = 3  # "random"/"trap" only (trap needs >= 3)
+MAX_FLIGHTS = 15  # None = full instance
+MAX_PLANES = 2  # None = full instance
+
+# Methods to compare, besides the Random/Greedy baselines that are always evaluated.
+ACTIVE_ALGOS = ["DQN", "DOUBLE_DQN"]  # any of AGENT_CLASSES in experiment_setup.py
+ACTIVE_VARIANTS = ["idle"]  # any of config.AGENT_VARIANT_OVERRIDES
+
+N_RUNS = 5  # independent schedules, each put through the full train -> disrupt/retrain cycle
+N_DISRUPTIONS = DEFAULT_N_DISRUPTIONS  # disrupt -> retrain rounds per run
+N_EPISODES = None  # episodes for the initial training; None = MODEL_TRAINING_PARAMS default per algo
+N_RETRAIN_EPISODES = None  # episodes for each retraining on a disruption; None = same as N_EPISODES
+
+# ============================================================================
 
 
 def main() -> None:
@@ -54,79 +69,55 @@ def main() -> None:
     run = start_run(
         "disruption_recovery",
         {
+            "instance": INSTANCE_NAME,
+            "schedule_type": SCHEDULE_TYPE,
+            "n_cities": N_CITIES if SCHEDULE_TYPE != "sample" else None,
+            "max_flights": MAX_FLIGHTS,
+            "max_planes": MAX_PLANES,
             "active_algos": ACTIVE_ALGOS,
             "active_variants": ACTIVE_VARIANTS,
             "n_runs": N_RUNS,
-            "n_flights": N,
-            "n_cities": C_N,
-            "n_planes": P_N,
-            "schedule_generator": "trap",
-            "n_disruption_iterations": N_ITERATIONS,
+            "n_disruptions": N_DISRUPTIONS,
+            "n_episodes": N_EPISODES,
+            "n_retrain_episodes": N_RETRAIN_EPISODES,
         },
         seed,
     )
 
-    training_data_dir = resolve_project_root() / "data" / "training"
-    flights_df = pd.read_csv(training_data_dir / "flights.csv")
-    itineraries_df = pd.read_csv(training_data_dir / "itineraries.csv")
-    aircraft_df = pd.read_csv(training_data_dir / "aircraft.csv").drop_duplicates(
-        subset="fixed_cost  hourly_cost initial_airport  seats  speed".split()
-    )
+    instances = discover_roadef_instances(resolve_project_root())
+    if INSTANCE_NAME not in instances:
+        raise ValueError(f"Unknown instance {INSTANCE_NAME!r}. Available: {sorted(instances)}")
+    base = load_roadef_instance(instances[INSTANCE_NAME])
     penalty: int = REWARD_CONFIG["penalty_per_min"]
+    retrain_episodes = N_RETRAIN_EPISODES if N_RETRAIN_EPISODES is not None else N_EPISODES
 
     iter_viz: Dict[str, Any] = {}
     for i in range(N_RUNS):
         log_section(f"RUN {i + 1}/{N_RUNS}")
-        real_flights = build_flight_pool(
-            flights_df.sample(N).sort_values("start_min", ascending=True),
-            itineraries_df,
+        flights, planes, airports, dist_dict = build_schedule(
+            base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed + i
         )
-        samp_flights = pd.DataFrame(
-            generate_trap_schedule(
-                n=N,
-                cities=list(np.random.choice(flights_df.origin.unique(), C_N)),
-                start_time_range=(
-                    flights_df.start_min.min(),
-                    flights_df.arrival_min.max(),
-                ),
-                pass_range=(
-                    itineraries_df.total_passenger_count.min(),
-                    itineraries_df.total_passenger_count.max(),
-                ),
-            )
+        logger.info(
+            f"Schedule: {SCHEDULE_TYPE} from {INSTANCE_NAME}, {len(flights)} flights, {len(planes)} aircraft, "
+            f"{len(airports)} airports"
         )
-        # Price the synthetic flights at the real sample's passenger-weighted average fare.
-        samp_flights["total_ticket_price"] = samp_flights["pass"] * np.average(
-            pd.DataFrame(real_flights)["total_ticket_price"] / pd.DataFrame(real_flights)["pass"],
-            weights=pd.DataFrame(real_flights)["pass"],
-        )
-        flights = cast(List[Dict[str, Any]], samp_flights.to_dict("records"))
-
-        planes = build_planes(aircraft_df.sample(P_N))
-        airports = sorted(
-            {f["origin"] for f in flights}
-            | {f["dest"] for f in flights}
-            | {p["initial_airport"] for p in planes.values()}
-        )
-        dist_dict = create_dist_dict_from_airports(airports_list=airports)
 
         dummy_env = AirlineEnv(
-            flights=flights,
-            plane_configs=planes,
-            dist_dict=dist_dict,
-            cities=airports,
-            penalty_per_min=penalty,
+            flights,
+            planes,
+            dist_dict,
+            airports,
+            penalty,
             use_clipping=REWARD_CONFIG["train_use_clipping"],
         )
         agents = build_variant_agents(dummy_env, ACTIVE_ALGOS, ACTIVE_VARIANTS)
         meta_dims = (len(flights), len(airports), len(planes))
-        logger.info(f"Schedule: trap, {len(flights)} flights, {len(planes)} aircraft, {len(airports)} airports")
         dg = DisruptionGenerator(airports, dist_dict)
 
         def evaluate(schedule: List[Dict[str, Any]], label: str) -> Dict[str, tuple]:
             return evaluate_models_on_schedule(agents, schedule, planes, dist_dict, airports, penalty, label)
 
-        def train(schedule: List[Dict[str, Any]], phase_name: str) -> None:
+        def train(schedule: List[Dict[str, Any]], phase_name: str, n_episodes: int | None) -> None:
             train_agents_on_schedule(
                 agents,
                 schedule,
@@ -138,10 +129,11 @@ def main() -> None:
                 run.checkpoint_dir,
                 1,
                 phase_name,
+                n_episodes=n_episodes,
             )
 
         log_section(f"RUN {i + 1}/{N_RUNS} | PHASE 1/3: train on the initial schedule")
-        train(flights, f"run{i + 1}_initial")
+        train(flights, f"run{i + 1}_initial", N_EPISODES)
         disruptions: Dict[str, tuple] = {}
         iter_viz[f"{i}"] = (
             flights,
@@ -149,17 +141,18 @@ def main() -> None:
             disruptions,
         )
 
+        plural = "s" if N_DISRUPTIONS != 1 else ""
         log_section(
-            f"RUN {i + 1}/{N_RUNS} | PHASE 2/3: disrupt -> evaluate -> retrain ({N_ITERATIONS} disruption{'s' if N_ITERATIONS != 1 else ''})"
+            f"RUN {i + 1}/{N_RUNS} | PHASE 2/3: disrupt -> evaluate -> retrain ({N_DISRUPTIONS} disruption{plural})"
         )
-        for d in range(1, N_ITERATIONS + 1):
-            log_subsection(f"Disruption {d}/{N_ITERATIONS}: generated from the initial schedule")
+        for d in range(1, N_DISRUPTIONS + 1):
+            log_subsection(f"Disruption {d}/{N_DISRUPTIONS}: generated from the initial schedule")
             disrupted = cast(
                 List[Dict[str, Any]],
-                dg.generate(flights, actions=build_disruption_actions(N)),
+                dg.generate(flights, actions=build_disruption_actions(len(flights))),
             )
             pre_retrain_eval = evaluate(disrupted, f"disruption {d}, before retraining")
-            train(disrupted, f"run{i + 1}_disruption{d}")
+            train(disrupted, f"run{i + 1}_disruption{d}", retrain_episodes)
             disruptions[f"{d}"] = (
                 disrupted,
                 pre_retrain_eval,

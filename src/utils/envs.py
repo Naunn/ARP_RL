@@ -72,12 +72,15 @@ class AirlineEnv:
     def relocation_estimates(self, times, locs, flight) -> tuple[np.ndarray, np.ndarray]:
         """Per-plane relocation distance to `flight`'s origin and earliest feasible start time."""
         loc_idx = np.fromiter(
-            (self._dist_idx.get(loc, self._unknown_city_idx) for loc in locs), dtype=np.int64, count=len(locs)
+            (self._dist_idx.get(loc, self._unknown_city_idx) for loc in locs),
+            dtype=np.int64,
+            count=len(locs),
         )
         origin_idx = self._dist_idx.get(flight["origin"], self._unknown_city_idx)
         reloc_dist = self._dist_matrix[loc_idx, origin_idx]
         actual_start = np.maximum(
-            flight["start"], np.asarray(times, dtype=np.float64) + reloc_dist / self._plane_speed_per_min
+            flight["start"],
+            np.asarray(times, dtype=np.float64) + reloc_dist / self._plane_speed_per_min,
         )
         return reloc_dist, actual_start
 
@@ -214,7 +217,10 @@ class AirlineEnv:
         delay_multiplier = 1.0 + min(delay_minutes / 60.0, 2.0)
         delay_penalty = delay_minutes * f["pass"] * self.penalty_per_min * delay_multiplier
         capacity_slack_penalty = (
-            500.0 * max(0.0, float(p_cfg["seats"]) - float(f.get("pass", 1))) / max(1.0, float(f.get("pass", 1)))
+            # 500.0 * max(0.0, float(p_cfg["seats"]) - float(f.get("pass", 1))) / max(1.0, float(f.get("pass", 1)))
+            (f.get("total_ticket_price", 0.0) / f.get("pass", 1))  # average ticket price per passenger
+            * max(0.0, float(p_cfg["seats"]) - float(f.get("pass", 1)))  # number of empty seats
+            # * 100  # additional penalty factor for empty seats
         )
         relocation_penalty = 0.05 * reloc_dist
         reward = (
