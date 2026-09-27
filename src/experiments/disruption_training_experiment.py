@@ -14,7 +14,8 @@ from typing import Any, Dict, List, cast
 import numpy as np
 import pandas as pd
 
-from src.config import N_ITERATIONS, REWARD_CONFIG, SEED
+from src.config import N_ITERATIONS, REWARD_CONFIG
+from src.config import SEED as DEFAULT_SEED
 from src.experiments.experiment_setup import (
     build_disruption_actions,
     build_variant_agents,
@@ -27,10 +28,16 @@ from src.instances import build_flight_pool, build_planes, generate_trap_schedul
 from src.utils import (
     DisruptionGenerator,
     create_dist_dict_from_airports,
+    log_section,
+    log_subsection,
     logger,
     set_seed,
 )
 from src.utils.envs import AirlineEnv
+
+# int -> reproducible (same schedules/results every rerun); None -> fresh seed, i.e. genuinely new
+# schedules every run (the seed used is still saved in the run's config.json).
+SEED = DEFAULT_SEED
 
 # Which ablation variants/algorithms this run trains and compares. See src.config.AGENT_VARIANT_OVERRIDES.
 ACTIVE_ALGOS = ["DQN", "DOUBLE_DQN"]
@@ -43,7 +50,7 @@ P_N = 2  # 2 for testing random + trap (100 iter); round(aircraft_df.shape[0]/3)
 
 
 def main() -> None:
-    set_seed(SEED)
+    seed = set_seed(SEED)
     run = start_run(
         "disruption_recovery",
         {
@@ -56,6 +63,7 @@ def main() -> None:
             "schedule_generator": "trap",
             "n_disruption_iterations": N_ITERATIONS,
         },
+        seed,
     )
 
     training_data_dir = resolve_project_root() / "data" / "training"
@@ -68,7 +76,7 @@ def main() -> None:
 
     iter_viz: Dict[str, Any] = {}
     for i in range(N_RUNS):
-        logger.info(f"\n[initial_train_cycle] Run {i + 1}/{N_RUNS}: building instance")
+        log_section(f"RUN {i + 1}/{N_RUNS}")
         real_flights = build_flight_pool(
             flights_df.sample(N).sort_values("start_min", ascending=True),
             itineraries_df,
@@ -112,6 +120,7 @@ def main() -> None:
         )
         agents = build_variant_agents(dummy_env, ACTIVE_ALGOS, ACTIVE_VARIANTS)
         meta_dims = (len(flights), len(airports), len(planes))
+        logger.info(f"Schedule: trap, {len(flights)} flights, {len(planes)} aircraft, {len(airports)} airports")
         dg = DisruptionGenerator(airports, dist_dict)
 
         def evaluate(schedule: List[Dict[str, Any]], label: str) -> Dict[str, tuple]:
@@ -131,34 +140,36 @@ def main() -> None:
                 phase_name,
             )
 
-        logger.info("\nPhase 1/3: Training on initial schedule...")
-        train(flights, f"run{i}_initial")
+        log_section(f"RUN {i + 1}/{N_RUNS} | PHASE 1/3: train on the initial schedule")
+        train(flights, f"run{i + 1}_initial")
         disruptions: Dict[str, tuple] = {}
         iter_viz[f"{i}"] = (
             flights,
-            evaluate(flights, "POST INITIAL TRAIN"),
+            evaluate(flights, "initial schedule, after initial training"),
             disruptions,
         )
 
-        logger.info("\nPhase 2/3: Iterative disruption cycle (generate -> evaluate -> retrain)...")
+        log_section(
+            f"RUN {i + 1}/{N_RUNS} | PHASE 2/3: disrupt -> evaluate -> retrain ({N_ITERATIONS} disruption{'s' if N_ITERATIONS != 1 else ''})"
+        )
         for d in range(1, N_ITERATIONS + 1):
-            logger.info(f"[disruption_cycle] Disruption {d}/{N_ITERATIONS}: generating from original schedule")
+            log_subsection(f"Disruption {d}/{N_ITERATIONS}: generated from the initial schedule")
             disrupted = cast(
                 List[Dict[str, Any]],
                 dg.generate(flights, actions=build_disruption_actions(N)),
             )
-            pre_retrain_eval = evaluate(disrupted, f"DISRUPTED PRE-RETRAIN {d}")
-            train(disrupted, f"run{i}_disrupted_retrain_iter{d}")
+            pre_retrain_eval = evaluate(disrupted, f"disruption {d}, before retraining")
+            train(disrupted, f"run{i + 1}_disruption{d}")
             disruptions[f"{d}"] = (
                 disrupted,
                 pre_retrain_eval,
-                evaluate(disrupted, f"DISRUPTED POST-RETRAIN {d}"),
-                evaluate(flights, f"INITIAL SCHEDULE POST-RETRAIN {d}"),
+                evaluate(disrupted, f"disruption {d}, after retraining"),
+                evaluate(flights, f"initial schedule, after retraining on disruption {d}"),
             )
 
-        logger.info("\nPhase 3/3: Re-evaluating final models on every disrupted schedule...")
+        log_section(f"RUN {i + 1}/{N_RUNS} | PHASE 3/3: re-evaluate final agents on every disruption")
         final_reeval = {
-            key: evaluate(disruptions[key][0], f"DISRUPTED REEVAL AFTER ALL RETRAINS {key}")
+            key: evaluate(disruptions[key][0], f"disruption {key}, after all retraining")
             for key in sorted(disruptions, key=int)
         }
         iter_viz[f"{i}"] = (*iter_viz[f"{i}"], final_reeval)

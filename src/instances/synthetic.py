@@ -58,8 +58,9 @@ def generate_trap_schedule(n, cities, start_time_range, pass_range):
 
     for i, f in enumerate(flights):
         # Force the first ~20% of flights into a high-capacity hub-to-hub trap
+        rand_origin, rand_dest = random.sample(cities, 2)
         if i < max(2, int(n * 0.2)):
-            random_direction = random.sample([cities[0], cities[1]], 2)
+            random_direction = random.sample([rand_origin, rand_dest], 2)
             f["origin"], f["dest"] = random_direction[0], random_direction[1]
             f["start"] = random.randint(t_min + 30, t_min + 200)
             f["pass"] = int(
@@ -76,4 +77,40 @@ def generate_trap_schedule(n, cities, start_time_range, pass_range):
     for idx, f in enumerate(flights):
         f["id"] = 101 + idx
 
+    return flights
+
+
+SCHEDULE_GENERATORS = {
+    "random": generate_random_flights,
+    "trap": generate_trap_schedule,
+}
+
+
+def synthetic_schedule_like(reference_flights: list[dict], kind: str, n_flights: int, n_cities: int) -> list[dict]:
+    """Synthetic "random" or "trap" schedule drawn from the same world as `reference_flights`.
+
+    Cities are sampled from the reference schedule's airports, start times and passenger counts span
+    the reference ranges, and fares use the reference's passenger-weighted average fare -- so a
+    synthetic schedule stays comparable (same airports/distances, same price level) to the real
+    one it was derived from. Uses the global `random` RNG, so it follows set_seed().
+    """
+    if kind not in SCHEDULE_GENERATORS:
+        raise ValueError(f"Unknown schedule kind {kind!r}; expected one of {sorted(SCHEDULE_GENERATORS)}")
+    min_cities = 3 if kind == "trap" else 2  # the trap generator draws its bottleneck from cities[:3]
+    airports = sorted({f["origin"] for f in reference_flights} | {f["dest"] for f in reference_flights})
+    if not min_cities <= n_cities <= len(airports):
+        raise ValueError(f"n_cities must be between {min_cities} and {len(airports)} for {kind!r}, got {n_cities}")
+
+    starts = [f["start"] for f in reference_flights]
+    passengers = [f["pass"] for f in reference_flights]
+    fare_per_passenger = sum(f["total_ticket_price"] for f in reference_flights) / sum(passengers)
+
+    flights = SCHEDULE_GENERATORS[kind](
+        n=n_flights,
+        cities=random.sample(airports, n_cities),
+        start_time_range=(min(starts), max(starts)),
+        pass_range=(min(passengers), max(passengers)),
+    )
+    for f in flights:
+        f["total_ticket_price"] = f["pass"] * fare_per_passenger
     return flights

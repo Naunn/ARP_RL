@@ -28,3 +28,25 @@ def plot_training_curve(episode_rewards: list[float], title: str, save_path: Pat
     if save_path is not None:
         plt.savefig(save_path, dpi=150)
     plt.show()
+
+
+def plot_method_boxplot(iter_viz: dict, title: str, save_path: Path | None = None) -> None:
+    """Box plot of each method's evaluation reward across iterations.
+
+    iter_viz is {"<iteration>": (training_scores, {method: (profit, delay)})} -- the format the
+    iteration-based experiments save. Saved to save_path if given, then shown.
+    """
+    keys = sorted(iter_viz, key=int)
+    methods = list(iter_viz[keys[0]][1])
+    rewards = [[iter_viz[k][1][method][0] for k in keys] for method in methods]
+
+    plt.figure(figsize=(10, 5))
+    plt.boxplot(rewards, tick_labels=methods, showfliers=False)
+    plt.title(title)
+    plt.ylabel("Reward ($)")
+    plt.xticks(rotation=20, ha="right")
+    plt.grid(True, axis="y", alpha=0.3, linestyle="--")
+    plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+    plt.show()

@@ -21,13 +21,20 @@ uv run python -m src.experiments.single_model_experiment
 ## Which Script Should I Run?
 
 All experiment scripts live in `src/experiments/`, build their agents/instances through
-`src.experiments.experiment_setup` and `src.instances`, seed every RNG with `SEED` from
-`src/config.py`, and write everything they produce to their own run folder (see *Run outputs*).
+`src.experiments.experiment_setup` and `src.instances`, and write everything they produce to their
+own run folder (see *Run outputs*). Each has a `SEED` knob at the top (default: `SEED` in
+`src/config.py`): an int reproduces the same schedules and results on every rerun; `None` draws a
+fresh seed so every run gets genuinely new schedules. The seed actually used is always saved in
+the run's `config.json`, so any run can be reproduced by setting `SEED` to it.
 
-- `python -m src.experiments.single_model_experiment` — dev playground: one model, one ROADEF
-  instance (optionally downsized), one training iteration. Edit the knobs at the top of the file.
-- `python -m src.experiments.iter_training` — DQN + Double DQN, base config, full training
-  instance, `N_ITERATIONS` iterations.
+- `python -m src.experiments.single_model_experiment` — dev playground: one model, one schedule
+  (`SCHEDULE_TYPE` = `"sample"` real flights / `"random"` / `"trap"`, built from a ROADEF
+  instance, optionally downsized), one training iteration.
+- `python -m src.experiments.iter_training` — compare chosen `ACTIVE_ALGOS` × `ACTIVE_VARIANTS`
+  (plus Random/Greedy baselines) over `N_ITERATIONS` on a chosen schedule type; ends with a box
+  plot of each method's reward across iterations. `NEW_SCHEDULE_EACH_ITERATION=False` keeps
+  training the same agents on one schedule; `True` draws a new schedule (and new agents) every
+  iteration.
 - `python -m src.experiments.solving_schedule_experiment` — fresh sampled instance every
   iteration, trains the active variants on each: generalization across instances.
 - `python -m src.experiments.disruption_training_experiment` — train on a schedule, then
@@ -65,6 +72,8 @@ dist_dict inputs `AirlineEnv` expects:
 - `roadef.py`: `discover_roadef_instances(project_root)` lists the 20 real ROADEF2009 instances in
   `data/` (A01-A10 at ~600 flights / 84 aircraft, B01-B10 at ~1300 flights / 251 aircraft), and
   `load_roadef_instance(path)` loads one.
+- `scenarios.py`: `build_schedule(base, schedule_type, max_flights, max_planes, n_cities, seed)` —
+  the "sample" / "random" / "trap" schedule an experiment trains on, built from a loaded instance.
 - `common.py`: `subsample_instance` (downsize a loaded instance, seedable), plus
   `build_flight_pool` / `build_planes`, the converters from raw tables into env inputs.
 - `synthetic.py`: `generate_random_flights` / `generate_trap_schedule` synthetic generators.

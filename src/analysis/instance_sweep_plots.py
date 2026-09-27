@@ -17,9 +17,10 @@ import pandas as pd
 from matplotlib.patches import Patch
 from scipy.ndimage import uniform_filter1d
 
+from src.analysis.plots import plot_method_boxplot
 from src.analysis.results_io import load_results, sorted_iteration_keys
 from src.experiments.experiment_setup import resolve_project_root
-from src.utils import logger
+from src.utils import log_subsection, logger
 
 LINE_STYLES = ["-", "--", "-.", ":"]
 MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]
@@ -31,15 +32,7 @@ def plot_single_run(iter_viz: Dict[str, Any]) -> None:
     models = list(iter_viz[keys[0]][1].keys())
     iteration_indices = list(range(len(keys)))
 
-    box_rewards = [[iter_viz[k][1][model][0] for k in keys] for model in models]
-    plt.figure(figsize=(10, 5))
-    plt.boxplot(box_rewards, tick_labels=models, showfliers=False)
-    plt.title(f"Rewards across {len(keys)} iterations")
-    plt.ylabel("Reward ($)")
-    plt.xticks(rotation=20, ha="right")
-    plt.grid(True, axis="y", alpha=0.3, linestyle="--")
-    plt.tight_layout()
-    plt.show()
+    plot_method_boxplot(iter_viz, f"Rewards across {len(keys)} iterations")
 
     colors = plt.cm.tab10(range(len(models)))
     fig, axes = plt.subplots(2, 1, figsize=(12, 10))
@@ -101,8 +94,8 @@ def plot_schedule_type_comparison(gathered_sets: list[tuple[str, Dict[str, Any]]
         for model in models:
             row[model] = f"{np.mean([dataset[k][1][model][0] for k in keys]) / 1000:.1f}k"
         summary_rows.append(row)
-    logger.info("\nAverage reward over iterations (per model, per schedule):")
-    logger.info("\n" + pd.DataFrame(summary_rows).to_string(index=False))
+    log_subsection("Average reward over iterations (per model, per schedule)")
+    logger.info(pd.DataFrame(summary_rows).to_string(index=False))
 
     max_iterations = max(len(dataset) for _, dataset in gathered_sets)
     fig, axes = plt.subplots(len(gathered_sets), 1, figsize=(16, 10), sharex=True)

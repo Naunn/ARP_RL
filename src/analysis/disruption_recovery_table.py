@@ -19,7 +19,7 @@ import pandas as pd
 
 from src.analysis.results_io import load_results, sorted_iteration_keys
 from src.experiments.experiment_setup import resolve_project_root
-from src.utils import logger
+from src.utils import log_section, logger
 
 
 def recovery_rows(schedule_type: str, iter_viz: Dict[str, Any]) -> list[dict]:
@@ -80,8 +80,8 @@ def main() -> None:
         logger.info(f"Loading disruption recovery data from {path}")
         rows.extend(recovery_rows(label, load_results(path)))
 
-    logger.info("\n" + "=" * 80 + "\nRECOVERY PROFIT ANALYSIS TABLE\n" + "=" * 80)
-    logger.info("\n" + pd.DataFrame(rows).to_string(index=False))
+    log_section("RECOVERY PROFIT ANALYSIS TABLE")
+    logger.info(pd.DataFrame(rows).to_string(index=False))
 
 
 if __name__ == "__main__":

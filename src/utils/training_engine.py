@@ -114,16 +114,17 @@ def train_dqn_iteration(
 ) -> list[float]:
     """Runs one training iteration of n_episodes; returns the per-episode rewards.
 
-    If checkpoint_dir is given, the best rolling-average policy (once epsilon is low enough) is
-    saved there as best_<model>_iterNNN.pth.
+    `training_name` is the label shown on this agent's log lines (defaults to model_name). If
+    checkpoint_dir is given, the best rolling-average policy (once epsilon is low enough) is saved
+    there as best_<model>_iterNNN.pth.
     """
     scores = []
     start_time = time.time()
     log_interval: int = MODEL_TRAINING_PARAMS[model_name]["log_interval"]
+    label = training_name or model_name
 
-    # Silence initial lifecycle log if not verbose
     if verbose:
-        logger.info(f"[{model_name}] (Training mode: {training_name}) Starting execution loop ({n_episodes} eps)")
+        logger.info(f"  {label:<20} training {n_episodes} episodes (start eps {agent.epsilon:.3f})")
 
     best_rolling_profit = float("-inf")
     patience_counter = 0
@@ -143,30 +144,22 @@ def train_dqn_iteration(
                         agent.policy_net.state_dict(),
                         checkpoint_dir / f"best_{model_name.lower()}_iter{iteration:03d}.pth",
                     )
-                    log_checkpoint(best_rolling_profit, ep)
+                    log_checkpoint(label, best_rolling_profit, ep)
             elif agent.epsilon <= cfg["min_epsilon_to_stop"]:
                 patience_counter += 1
 
             if patience_counter >= cfg["patience"]:
-                # Always good to know why training stopped early
-                log_early_stop(ep, n_episodes, cfg["patience"], best_rolling_profit)
+                log_early_stop(label, ep, n_episodes, cfg["patience"], best_rolling_profit)
                 break
 
-        # Wrap the frequent spam logs (the progress bar steps)
         if verbose and (ep == 1 or ep % log_interval == 0 or ep == n_episodes):
-            avg_score = float(np.mean(scores[-log_interval:]))
+            window = min(log_interval, len(scores))
             eta_str = time.strftime(
                 "%H:%M:%S",
                 time.gmtime(int((n_episodes - ep) * ((time.time() - start_time) / ep))),
             )
-            log_progress(
-                iteration,
-                (ep / n_episodes) * 100,
-                agent.epsilon,
-                avg_score,
-                eta_str,
-                model_name=model_name,
-                training_name=training_name,
-            )
+            log_progress(label, ep, n_episodes, agent.epsilon, float(np.mean(scores[-window:])), window, eta_str)
 
+    if verbose:
+        logger.info(f"  {label:<20} done in {time.time() - start_time:.1f}s")
     return scores

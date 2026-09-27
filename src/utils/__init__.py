@@ -4,8 +4,9 @@
 from src.utils.logging import (
     log_checkpoint,
     log_early_stop,
-    log_iteration_start,
     log_progress,
+    log_section,
+    log_subsection,
     logger,
 )
 from src.utils.seeding import set_seed
@@ -13,8 +14,9 @@ from src.utils.seeding import set_seed
 __all__ = [
     "log_checkpoint",
     "log_early_stop",
-    "log_iteration_start",
     "log_progress",
+    "log_section",
+    "log_subsection",
     "logger",
     "set_seed",
 ]

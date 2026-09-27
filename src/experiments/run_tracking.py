@@ -20,7 +20,7 @@ from typing import Any
 
 from src import config
 from src.experiments.experiment_setup import resolve_project_root
-from src.utils.logging import logger
+from src.utils.logging import FILE_FORMATTER, log_section, logger
 
 
 @dataclass
@@ -58,8 +58,12 @@ def config_snapshot() -> dict:
     return {name: getattr(config, name) for name in dir(config) if name.isupper()}
 
 
-def start_run(name: str, params: dict) -> Run:
-    """Creates the run folder, writes config.json, and mirrors the logger into run.log."""
+def start_run(name: str, params: dict, seed: int) -> Run:
+    """Creates the run folder, writes config.json, and mirrors the logger into run.log.
+
+    `seed` is the seed actually applied (as returned by set_seed), so even a run started with
+    SEED=None can be reproduced by setting SEED to this value.
+    """
     project_root = resolve_project_root()
     run_dir = project_root / config.RUNS_DIR / f"{datetime.now():%Y%m%d-%H%M%S}_{name}"
     (run_dir / "checkpoints").mkdir(parents=True)
@@ -67,6 +71,7 @@ def start_run(name: str, params: dict) -> Run:
     payload = {
         "name": name,
         "started_at": datetime.now().isoformat(timespec="seconds"),
+        "seed": seed,
         "git": _git_state(project_root),
         "params": params,
         "config": config_snapshot(),
@@ -74,8 +79,10 @@ def start_run(name: str, params: dict) -> Run:
     (run_dir / "config.json").write_text(json.dumps(payload, indent=2, default=str))
 
     file_handler = logging.FileHandler(run_dir / "run.log")
-    file_handler.setFormatter(logger.handlers[0].formatter)
+    file_handler.setFormatter(FILE_FORMATTER)
     logger.addHandler(file_handler)
 
+    log_section(f"RUN {name}")
     logger.info(f"Run directory: {run_dir}")
+    logger.info(f"Seed: {seed}")
     return Run(name=name, run_dir=run_dir)

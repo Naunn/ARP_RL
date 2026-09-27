@@ -12,7 +12,8 @@ from typing import Any, Dict
 import numpy as np
 import pandas as pd
 
-from src.config import N_ITERATIONS, REWARD_CONFIG, SEED
+from src.config import N_ITERATIONS, REWARD_CONFIG
+from src.config import SEED as DEFAULT_SEED
 from src.experiments.experiment_setup import (
     build_variant_agents,
     evaluate_models_on_schedule,
@@ -21,8 +22,12 @@ from src.experiments.experiment_setup import (
 )
 from src.experiments.run_tracking import start_run
 from src.instances import build_flight_pool, build_planes, generate_random_flights, generate_trap_schedule
-from src.utils import create_dist_dict_from_airports, logger, set_seed
+from src.utils import create_dist_dict_from_airports, log_section, logger, set_seed
 from src.utils.envs import AirlineEnv
+
+# int -> reproducible (same schedules/results every rerun); None -> fresh seed, i.e. genuinely new
+# schedules every run (the seed used is still saved in the run's config.json).
+SEED = DEFAULT_SEED
 
 # Which ablation variants/algorithms this run trains and compares. See src.config.AGENT_VARIANT_OVERRIDES.
 ACTIVE_ALGOS = ["DOUBLE_DQN"]
@@ -35,7 +40,7 @@ TRAP = False
 
 
 def main() -> None:
-    set_seed(SEED)
+    seed = set_seed(SEED)
     run = start_run(
         "instance_sweep",
         {
@@ -47,6 +52,7 @@ def main() -> None:
             "trap": TRAP,
             "n_iterations": N_ITERATIONS,
         },
+        seed,
     )
 
     training_data_dir = resolve_project_root() / "data" / "training"
@@ -59,7 +65,7 @@ def main() -> None:
 
     iter_viz: Dict[str, Any] = {}
     for i in range(N_ITERATIONS):
-        logger.info(f"\n{'=' * 54} [ITERATION {i + 1}] {'=' * 54}")
+        log_section(f"ITERATION {i + 1}/{N_ITERATIONS}")
         flights = build_flight_pool(flights_df.sample(N).sort_values("start_min", ascending=True), itineraries_df)
 
         schedule_generator = generate_trap_schedule if TRAP else generate_random_flights
@@ -101,13 +107,13 @@ def main() -> None:
         )
         agents = build_variant_agents(dummy_env, ACTIVE_ALGOS, ACTIVE_VARIANTS)
         meta_dims = (len(flights), len(airports), len(planes))
+        logger.info(f"Schedule: {len(flights)} flights, {len(planes)} aircraft, {len(airports)} airports")
 
-        logger.info("\nTraining on sampled schedule...")
         training_scores = train_agents_on_schedule(
-            agents, flights, planes, dist_dict, airports, penalty, meta_dims, run.checkpoint_dir, 1, f"sweep{i}"
+            agents, flights, planes, dist_dict, airports, penalty, meta_dims, run.checkpoint_dir, 1, f"iter{i + 1}"
         )
         eval_results = evaluate_models_on_schedule(
-            agents, flights, planes, dist_dict, airports, penalty, "POST INITIAL TRAIN"
+            agents, flights, planes, dist_dict, airports, penalty, f"iteration {i + 1}/{N_ITERATIONS}"
         )
         iter_viz[f"{i}"] = (training_scores, eval_results)
 

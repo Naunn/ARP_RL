@@ -2,8 +2,10 @@
 
 from typing import Any, Dict
 
-# Global RNG seed applied by every experiment via src.utils.set_seed, so reruns are reproducible.
-SEED: int = 42
+# Default RNG seed for every experiment (each script can override it with its own SEED knob).
+# An int makes reruns reproduce the same schedules/results; None draws a fresh seed every run
+# (genuinely new schedules) -- the seed used is still recorded in the run's config.json.
+SEED: int | None = 42
 
 N_ITERATIONS: int = 5
 

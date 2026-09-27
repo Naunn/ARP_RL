@@ -5,9 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from src.utils.logging import get_logger
-
-logger = get_logger("plane_assignment")
+from src.utils.logging import log_subsection, logger
 
 
 class AirlineEnv:
@@ -317,23 +315,17 @@ def run_unified_execution(
     verbose=True logs a line per flight -- useful for inspecting a small instance, but slow and
     very noisy on ROADEF-sized ones, hence off by default.
     """
-    # Wrap the header logs
-    if verbose:
-        logger.info(f"\n{'=' * 30} {solver_name.upper()} EXECUTION {'=' * 30}")
-
     state = env.get_vector_state(env.reset_with_schedule(flights))
     total_profit, total_delay_mins, done = 0.0, 0.0, False
 
-    header = (
-        f"{'FLIGHT':<8} | {'PAX':<4} | {'PLANE':<10} | {'FROM':<6} | "
-        f"{'ORIGIN':<8} | {'DEST':<6} | {'SCHED':>5} | {'ACTUAL':>6} | "
-        f"{'ARRIVE':>6} | {'PROFIT'}"
-    )
-    line_width = len(header) + 2
-
     if verbose:
-        logger.info(header)
-        logger.info("-" * line_width)
+        log_subsection(f"Schedule executed by {solver_name}")
+        logger.info("  legend: (!) delayed | (*) relocated | SCHED/ACTUAL/ARRIVE in minutes from T=0")
+        logger.info(
+            f"  {'FLIGHT':<8} | {'PAX':<4} | {'PLANE':<10} | {'FROM':<6} | "
+            f"{'ORIGIN':<8} | {'DEST':<6} | {'SCHED':>5} | {'ACTUAL':>6} | "
+            f"{'ARRIVE':>6} | {'PROFIT'}"
+        )
 
     while not done:
         f = flights[env.current_f_idx]
@@ -352,22 +344,16 @@ def run_unified_execution(
         origin_display = f"{f['origin']}*" if relocated else f["origin"]
         actual_start_display = f"{info['actual_start']:.0f}!" if flight_delay > 0 else f"{info['actual_start']:.0f}"
 
-        # Wrap the per-flight logs
         if verbose:
             logger.info(
-                f"{f['id']:<8} | {f['pass']:<4} | {p_name.upper():<10} | "
+                f"  {f['id']:<8} | {f['pass']:<4} | {p_name.upper():<10} | "
                 f"{from_display:<6} | {origin_display:<8} | "
                 f"{f['dest']:<6} | {f['start']:>5.0f} | {actual_start_display:>6} | "
                 f"{info['arrival_at_dest']:>6.0f} | ${reward:>10,.0f}"
             )
         state = env.get_vector_state(next_raw_state)
 
-    # Wrap the footer summaries
     if verbose:
-        logger.info("-" * line_width)
-        logger.info(f"TOTAL {solver_name.upper()} PROFIT: ${total_profit:>12,.2f}")
-        logger.info(f"TOTAL SYSTEM DELAY: {total_delay_mins:.0f} minutes")
-        logger.info("LEGEND: (!) Delayed | (*) Relocated | SCHED/ACTUAL/ARRIVE in minutes from T=0")
-        logger.info("=" * line_width + "\n")
+        logger.info(f"  total profit ${total_profit:,.2f} | total delay {total_delay_mins:,.0f} min")
 
     return total_profit, total_delay_mins

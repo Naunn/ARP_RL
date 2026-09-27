@@ -7,7 +7,8 @@ solving the identical instance, not just statistically similar ones.
 
 from src.instances.common import build_flight_pool, build_planes, subsample_instance
 from src.instances.roadef import discover_roadef_instances, load_roadef_instance
-from src.instances.synthetic import generate_random_flights, generate_trap_schedule
+from src.instances.scenarios import SCHEDULE_TYPES, build_schedule
+from src.instances.synthetic import generate_random_flights, generate_trap_schedule, synthetic_schedule_like
 
 __all__ = [
     "build_flight_pool",
@@ -15,6 +16,9 @@ __all__ = [
     "subsample_instance",
     "discover_roadef_instances",
     "load_roadef_instance",
+    "SCHEDULE_TYPES",
+    "build_schedule",
     "generate_random_flights",
     "generate_trap_schedule",
+    "synthetic_schedule_like",
 ]

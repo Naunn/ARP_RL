@@ -27,7 +27,7 @@ from src.utils.envs import (
     RandomSolver,
     run_unified_execution,
 )
-from src.utils.logging import log_iteration_start, logger
+from src.utils.logging import log_subsection, logger
 from src.utils.training_engine import (
     get_model_filename,
     initialize_agent,
@@ -120,17 +120,14 @@ def evaluate_agent_performance(env: AirlineEnv, solver: Any, name: str, verbose:
 
 
 def print_results_table(results: Dict[str, Tuple[float, float]], name: str) -> None:
-    """Prints an aligned evaluation matrix of profit/delay per strategy."""
-    w1, w2, w3 = 26, 21, 21
-    header_row = f"{'STRATEGY':<{w1}} | {f'{name} PROFIT':>{w2}} | {f'{name} DELAY':>{w3}}"
-    line_length = len(header_row)
-
-    logger.info("\n" + "=" * line_length)
-    logger.info(header_row)
-    logger.info("-" * line_length)
-    for strat_name, (profit, delay) in results.items():
-        logger.info(f"{strat_name:<{w1}} | {f'${profit:,.0f}':>{w2}} | {f'{delay:,.0f}m':>{w3}}")
-    logger.info("=" * line_length + "\n")
+    """Logs an aligned profit/delay table per strategy under an "Evaluation: <name>" header."""
+    log_subsection(f"Evaluation: {name}")
+    rows = [f"  {'Strategy':<22} {'Profit':>14} {'Delay':>12}"]
+    rows += [
+        f"  {strategy:<22} {f'${profit:,.0f}':>14} {f'{delay:,.0f} min':>12}"
+        for strategy, (profit, delay) in results.items()
+    ]
+    logger.info("\n".join(rows))
 
 
 def build_solvers(agents: AgentTable) -> Dict[str, Any]:
@@ -184,9 +181,11 @@ def train_agents_on_schedule(
     n_iterations: int,
     phase_name: str,
     verbose: bool = True,
+    n_episodes: int | None = None,
 ) -> Dict[str, List[float]]:
     """Trains every (variant, algo) agent for n_iterations training-iteration passes on a schedule,
-    saving each agent's weights to checkpoint_dir after every iteration.
+    saving each agent's weights to checkpoint_dir after every iteration. n_episodes overrides the
+    per-algo MODEL_TRAINING_PARAMS episode count.
 
     Matches the historical behavior of this loop: the returned score list per (variant, algo) is
     whichever training iteration ran *last* (each iteration reassigns, not accumulates).
@@ -196,15 +195,15 @@ def train_agents_on_schedule(
     }
 
     for iteration in range(1, n_iterations + 1):
-        log_iteration_start(iteration, n_iterations)
-        logger.info(f"[{phase_name}] Schedule training iteration {iteration}/{n_iterations}")
+        rounds = f", round {iteration}/{n_iterations}" if n_iterations > 1 else ""
+        log_subsection(f"Training: {phase_name}{rounds}")
 
         for variant, by_algo in agents.items():
             for algo, agent in by_algo.items():
-                n_episodes = MODEL_TRAINING_PARAMS[algo]["n_episodes"]
+                episodes = n_episodes if n_episodes is not None else MODEL_TRAINING_PARAMS[algo]["n_episodes"]
                 hyperparams = copy.deepcopy(MODEL_HYPERPARAMS[algo])
                 hyperparams.update(AGENT_VARIANT_OVERRIDES[variant])
-                reset_agent_exploration(agent, n_episodes, hyperparams)
+                reset_agent_exploration(agent, episodes, hyperparams)
 
                 env = AirlineEnv(
                     schedule_flights,
@@ -217,16 +216,15 @@ def train_agents_on_schedule(
                 scores[variant_score_key(variant, algo)] = train_dqn_iteration(
                     agent,
                     env,
-                    n_episodes,
+                    episodes,
                     iteration,
                     model_name=algo,
-                    training_name=f"{phase_name}{_variant_tag(variant)}",
+                    training_name=variant_label(variant, algo),
                     verbose=verbose,
                 )
 
                 model_tag = f"{algo}_{phase_name}{_variant_tag(variant)}"
-                checkpoint_path = get_model_filename(checkpoint_dir, iteration, *meta_dims, n_episodes, model_tag)
+                checkpoint_path = get_model_filename(checkpoint_dir, iteration, *meta_dims, episodes, model_tag)
                 torch.save(agent.policy_net.state_dict(), checkpoint_path)
 
-    logger.info(f"[{phase_name}] Training cycle finished across all iterations.")
     return scores

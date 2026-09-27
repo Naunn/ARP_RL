@@ -1,104 +1,157 @@
-"""Simplest baseline pipeline: train DQN + Double DQN (base config, no ablation variants, no
-disruptions) on the full data/training instance for N_ITERATIONS, evaluating against the
-Random/Greedy baselines after each iteration and once more at the end.
+"""Multi-iteration comparison: train the chosen algorithms/variants for N_ITERATIONS iterations
+on a chosen schedule (real "sample", synthetic "random", or synthetic "trap"), evaluating every
+method against the Random/Greedy baselines after each iteration, and finish with a box plot of
+each method's reward across iterations.
 
-Results land in runs/<timestamp>_iter_training/.
+Two modes, via NEW_SCHEDULE_EACH_ITERATION:
+- False: one schedule; the same agents keep training on it every iteration, so the box plot shows
+  each method's reward spread over the course of training on that schedule.
+- True: a fresh schedule (and fresh agents) every iteration, so the box plot shows each method's
+  reward spread across many different schedules.
+
+Results land in runs/<timestamp>_iter_training/ (results.pkl as {"<iteration>": (training_scores,
+eval_results)}, plus the box plot); `python -m src.analysis.instance_sweep_plots --run <dir>`
+adds per-iteration profit/delay trend plots.
 """
 
-import pandas as pd
-import torch
+import numpy as np
 
-from src.config import MODEL_HYPERPARAMS, MODEL_TRAINING_PARAMS, N_ITERATIONS, REWARD_CONFIG, SEED
+from src.analysis.plots import plot_method_boxplot
+from src.config import N_ITERATIONS as DEFAULT_N_ITERATIONS
+from src.config import REWARD_CONFIG
 from src.experiments.experiment_setup import (
-    AGENT_CLASSES,
-    evaluate_agent_performance,
-    print_results_table,
+    build_variant_agents,
+    evaluate_models_on_schedule,
     resolve_project_root,
+    train_agents_on_schedule,
 )
 from src.experiments.run_tracking import start_run
-from src.instances import build_flight_pool, build_planes
-from src.utils import (
-    AirlineEnv,
-    ClosestPlaneGreedySolver,
-    DQNSolver,
-    RandomSolver,
-    create_dist_dict_from_airports,
-    get_model_filename,
-    initialize_agent,
-    log_iteration_start,
-    logger,
-    reset_agent_exploration,
-    set_seed,
-    train_dqn_iteration,
+from src.instances import (
+    build_schedule,
+    discover_roadef_instances,
+    load_roadef_instance,
 )
+from src.utils import log_section, logger, set_seed
+from src.utils.envs import AirlineEnv
 
-ALGO_DISPLAY = {"DQN": "DQN", "DOUBLE_DQN": "Double DQN"}
+# ============================================================================
+# WHAT TO RUN
+# ============================================================================
+
+# int -> reproducible (same schedules, same results every rerun); None -> fresh seed, i.e.
+# genuinely new schedules every run (the seed used is still saved in the run's config.json).
+SEED = None  # DEFAULT_SEED
+
+# ROADEF instance the fleet, distances, and (for synthetic schedules) airports/fares come from:
+# A01_6088570..A10_6088590 (~600 flights/84 aircraft) or B_01..B_10 (~1400 flights/255 aircraft).
+INSTANCE_NAME = "A01_6088570"
+
+# "sample" (real flights) / "random" / "trap" -- see src/instances/scenarios.py
+SCHEDULE_TYPE = "trap"
+N_CITIES = 4  # "random"/"trap" only (trap needs >= 3)
+MAX_FLIGHTS = 25  # None = full instance
+MAX_PLANES = 5  # None = full instance
+
+# Methods to compare, besides the Random/Greedy baselines that are always evaluated.
+ACTIVE_ALGOS = ["DQN", "DOUBLE_DQN"]  # any of AGENT_CLASSES in experiment_setup.py
+ACTIVE_VARIANTS = ["idle"]  # any of config.AGENT_VARIANT_OVERRIDES: "full" / "no_bias" / "idle"
+
+N_ITERATIONS = DEFAULT_N_ITERATIONS
+N_EPISODES = 500  # episodes per iteration; None = MODEL_TRAINING_PARAMS default per algo
+NEW_SCHEDULE_EACH_ITERATION = True
+
+# ============================================================================
 
 
 def main() -> None:
-    set_seed(SEED)
-    run = start_run("iter_training", {"algos": list(ALGO_DISPLAY), "n_iterations": N_ITERATIONS})
-
-    training_data_dir = resolve_project_root() / "data" / "training"
-    flights_df = pd.read_csv(training_data_dir / "flights.csv")
-    itineraries_df = pd.read_csv(training_data_dir / "itineraries.csv")
-    aircraft_df = pd.read_csv(training_data_dir / "aircraft.csv").drop_duplicates(
-        subset="fixed_cost  hourly_cost initial_airport  seats  speed".split()
+    seed = set_seed(SEED)
+    run = start_run(
+        "iter_training",
+        {
+            "instance": INSTANCE_NAME,
+            "schedule_type": SCHEDULE_TYPE,
+            "n_cities": N_CITIES if SCHEDULE_TYPE != "sample" else None,
+            "max_flights": MAX_FLIGHTS,
+            "max_planes": MAX_PLANES,
+            "active_algos": ACTIVE_ALGOS,
+            "active_variants": ACTIVE_VARIANTS,
+            "n_iterations": N_ITERATIONS,
+            "n_episodes": N_EPISODES,
+            "new_schedule_each_iteration": NEW_SCHEDULE_EACH_ITERATION,
+        },
+        seed,
     )
 
-    planes = build_planes(aircraft_df)
-    flights = build_flight_pool(flights_df, itineraries_df)
-    airports = sorted(
-        {f["origin"] for f in flights} | {f["dest"] for f in flights} | {p["initial_airport"] for p in planes.values()}
-    )
-    dist_dict = create_dist_dict_from_airports(airports_list=airports)
-    penalty: int = REWARD_CONFIG["penalty_per_min"]
-    meta_dims = (len(flights), len(airports), len(planes))
+    instances = discover_roadef_instances(resolve_project_root())
+    if INSTANCE_NAME not in instances:
+        raise ValueError(f"Unknown instance {INSTANCE_NAME!r}. Available: {sorted(instances)}")
+    base = load_roadef_instance(instances[INSTANCE_NAME])
+    penalty = REWARD_CONFIG["penalty_per_min"]
 
-    def make_env(clipping_key: str) -> AirlineEnv:
-        return AirlineEnv(flights, planes, dist_dict, airports, penalty, use_clipping=REWARD_CONFIG[clipping_key])
+    def new_schedule_and_agents(i: int):
+        # A new schedule can change the state dimensions (e.g. a different number of airports),
+        # so it always gets freshly initialized agents.
+        schedule = build_schedule(base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed + i)
+        flights, planes, airports, dist_dict = schedule
+        dummy_env = AirlineEnv(
+            flights,
+            planes,
+            dist_dict,
+            airports,
+            penalty,
+            use_clipping=REWARD_CONFIG["train_use_clipping"],
+        )
+        return schedule, build_variant_agents(dummy_env, ACTIVE_ALGOS, ACTIVE_VARIANTS)
 
-    agents = {
-        algo: initialize_agent(make_env("train_use_clipping"), AGENT_CLASSES[algo], MODEL_HYPERPARAMS[algo])
-        for algo in ALGO_DISPLAY
-    }
+    (flights, planes, airports, dist_dict), agents = new_schedule_and_agents(0)
+    iter_viz = {}
+    for i in range(N_ITERATIONS):
+        log_section(f"ITERATION {i + 1}/{N_ITERATIONS}")
+        fresh = i == 0 or NEW_SCHEDULE_EACH_ITERATION
+        if i > 0 and NEW_SCHEDULE_EACH_ITERATION:
+            (flights, planes, airports, dist_dict), agents = new_schedule_and_agents(i)
+        logger.info(
+            f"Schedule: {SCHEDULE_TYPE} from {INSTANCE_NAME}, {len(flights)} flights, {len(planes)} aircraft, "
+            f"{len(airports)} airports ({'new schedule, new agents' if fresh else 'same schedule, agents keep training'})"
+        )
+        meta_dims = (len(flights), len(airports), len(planes))
 
-    def evaluate(env: AirlineEnv, label: str) -> dict:
-        solvers = {
-            "Random Baseline": RandomSolver(),
-            "Greedy Baseline": ClosestPlaneGreedySolver(),
-            **{ALGO_DISPLAY[algo]: DQNSolver(agent) for algo, agent in agents.items()},
-        }
-        results = {name: evaluate_agent_performance(env, solver, name) for name, solver in solvers.items()}
-        print_results_table(results, label)
-        return results
+        training_scores = train_agents_on_schedule(
+            agents,
+            flights,
+            planes,
+            dist_dict,
+            airports,
+            penalty,
+            meta_dims,
+            run.checkpoint_dir,
+            1,
+            f"iter{i + 1}",
+            n_episodes=N_EPISODES,
+        )
+        eval_results = evaluate_models_on_schedule(
+            agents,
+            flights,
+            planes,
+            dist_dict,
+            airports,
+            penalty,
+            f"iteration {i + 1}/{N_ITERATIONS}",
+        )
+        iter_viz[f"{i}"] = (training_scores, eval_results)
 
-    per_iteration_eval = {}
-    for iteration in range(1, N_ITERATIONS + 1):
-        log_iteration_start(iteration, N_ITERATIONS)
-        for algo, agent in agents.items():
-            n_episodes = MODEL_TRAINING_PARAMS[algo]["n_episodes"]
-            reset_agent_exploration(agent, n_episodes, MODEL_HYPERPARAMS[algo])
-            train_dqn_iteration(
-                agent,
-                make_env("train_use_clipping"),
-                n_episodes,
-                iteration,
-                model_name=algo,
-                checkpoint_dir=run.checkpoint_dir,
-            )
-            torch.save(
-                agent.policy_net.state_dict(),
-                get_model_filename(run.checkpoint_dir, iteration, *meta_dims, n_episodes, algo),
-            )
-        per_iteration_eval[iteration] = evaluate(make_env("eval_use_clipping"), f"ITER {iteration}")
-
-    logger.info("Global training cycle finished across all iterations; running final evaluation.")
-    final_eval = evaluate(make_env("final_eval_use_clipping"), "FINAL")
-
+    methods = list(iter_viz["0"][1])
     run.save_results(
-        {"per_iteration_eval": per_iteration_eval, "final_eval": final_eval},
-        metrics={name: {"profit": profit, "delay_min": delay} for name, (profit, delay) in final_eval.items()},
+        iter_viz,
+        metrics={
+            "mean_profit": {m: float(np.mean([iter_viz[k][1][m][0] for k in iter_viz])) for m in methods},
+            "mean_delay_min": {m: float(np.mean([iter_viz[k][1][m][1] for k in iter_viz])) for m in methods},
+        },
+    )
+    plot_method_boxplot(
+        iter_viz,
+        f"{INSTANCE_NAME} {SCHEDULE_TYPE}: reward across {N_ITERATIONS} iterations",
+        save_path=run.run_dir / "method_boxplot.png",
     )
 
 
