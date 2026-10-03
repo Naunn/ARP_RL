@@ -19,7 +19,9 @@ from src.config import (  # noqa: F401  (kept for switching SEED back)
     SEED as DEFAULT_SEED,
 )
 from src.experiments.experiment_setup import (
+    RETRY_SEED_STRIDE,
     build_disruption_actions,
+    build_schedule_with_retries,
     build_variant_agents,
     evaluate_models_on_schedule,
     resolve_project_root,
@@ -61,6 +63,10 @@ N_DISRUPTIONS = DEFAULT_N_DISRUPTIONS  # disrupt -> retrain rounds per run
 N_EPISODES = None  # episodes for the initial training; None = MODEL_TRAINING_PARAMS default per algo
 N_RETRAIN_EPISODES = None  # episodes for each retraining on a disruption; None = same as N_EPISODES
 
+# Also evaluate the optimal CPLEX baseline (src/baselines/cplex_solver.py) as a reference. Needs
+# `uv sync --extra cplex`; the free CPLEX edition only handles ~10-12 flights with 3 planes.
+INCLUDE_CPLEX = False
+
 # ============================================================================
 
 
@@ -80,6 +86,7 @@ def main() -> None:
             "n_disruptions": N_DISRUPTIONS,
             "n_episodes": N_EPISODES,
             "n_retrain_episodes": N_RETRAIN_EPISODES,
+            "include_cplex": INCLUDE_CPLEX,
         },
         seed,
     )
@@ -94,8 +101,15 @@ def main() -> None:
     iter_viz: Dict[str, Any] = {}
     for i in range(N_RUNS):
         log_section(f"RUN {i + 1}/{N_RUNS}")
-        flights, planes, airports, dist_dict = build_schedule(
-            base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed + i
+        # If the CPLEX baseline is included and fails on a schedule, a new one is drawn for the
+        # same run (next attempt's seed) before any training happens on it.
+        flights, planes, airports, dist_dict = build_schedule_with_retries(
+            lambda attempt: build_schedule(
+                base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed + i + attempt * RETRY_SEED_STRIDE
+            ),
+            penalty,
+            INCLUDE_CPLEX,
+            label=f"run {i + 1}, initial schedule",
         )
         logger.info(
             f"Schedule: {SCHEDULE_TYPE} from {INSTANCE_NAME}, {len(flights)} flights, {len(planes)} aircraft, "
@@ -115,7 +129,9 @@ def main() -> None:
         dg = DisruptionGenerator(airports, dist_dict)
 
         def evaluate(schedule: List[Dict[str, Any]], label: str) -> Dict[str, tuple]:
-            return evaluate_models_on_schedule(agents, schedule, planes, dist_dict, airports, penalty, label)
+            return evaluate_models_on_schedule(
+                agents, schedule, planes, dist_dict, airports, penalty, label, include_cplex=INCLUDE_CPLEX
+            )
 
         def train(schedule: List[Dict[str, Any]], phase_name: str, n_episodes: int | None) -> None:
             train_agents_on_schedule(
@@ -147,9 +163,17 @@ def main() -> None:
         )
         for d in range(1, N_DISRUPTIONS + 1):
             log_subsection(f"Disruption {d}/{N_DISRUPTIONS}: generated from the initial schedule")
-            disrupted = cast(
-                List[Dict[str, Any]],
-                dg.generate(flights, actions=build_disruption_actions(len(flights))),
+            # A disruption the CPLEX baseline fails on is replaced by a newly generated one.
+            disrupted, _, _, _ = build_schedule_with_retries(
+                lambda _attempt: (
+                    cast(List[Dict[str, Any]], dg.generate(flights, actions=build_disruption_actions(len(flights)))),
+                    planes,
+                    airports,
+                    dist_dict,
+                ),
+                penalty,
+                INCLUDE_CPLEX,
+                label=f"run {i + 1}, disruption {d}",
             )
             pre_retrain_eval = evaluate(disrupted, f"disruption {d}, before retraining")
             train(disrupted, f"run{i + 1}_disruption{d}", retrain_episodes)

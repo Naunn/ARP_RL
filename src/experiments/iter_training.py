@@ -20,6 +20,8 @@ from src.analysis.plots import plot_method_boxplot
 from src.config import N_ITERATIONS as DEFAULT_N_ITERATIONS
 from src.config import REWARD_CONFIG
 from src.experiments.experiment_setup import (
+    RETRY_SEED_STRIDE,
+    build_schedule_with_retries,
     build_variant_agents,
     evaluate_models_on_schedule,
     resolve_project_root,
@@ -60,6 +62,10 @@ N_ITERATIONS = DEFAULT_N_ITERATIONS
 N_EPISODES = 500  # episodes per iteration; None = MODEL_TRAINING_PARAMS default per algo
 NEW_SCHEDULE_EACH_ITERATION = True
 
+# Also evaluate the optimal CPLEX baseline (src/baselines/cplex_solver.py) as a reference. Needs
+# `uv sync --extra cplex`; the free CPLEX edition only handles ~10-12 flights with 3 planes.
+INCLUDE_CPLEX = False
+
 # ============================================================================
 
 
@@ -78,6 +84,7 @@ def main() -> None:
             "n_iterations": N_ITERATIONS,
             "n_episodes": N_EPISODES,
             "new_schedule_each_iteration": NEW_SCHEDULE_EACH_ITERATION,
+            "include_cplex": INCLUDE_CPLEX,
         },
         seed,
     )
@@ -91,7 +98,16 @@ def main() -> None:
     def new_schedule_and_agents(i: int):
         # A new schedule can change the state dimensions (e.g. a different number of airports),
         # so it always gets freshly initialized agents.
-        schedule = build_schedule(base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed + i)
+        # If the CPLEX baseline is included and fails on a schedule, a new one is drawn for the
+        # same iteration (next attempt's seed) before any training happens on it.
+        schedule = build_schedule_with_retries(
+            lambda attempt: build_schedule(
+                base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed + i + attempt * RETRY_SEED_STRIDE
+            ),
+            penalty,
+            INCLUDE_CPLEX,
+            label=f"iteration {i + 1}",
+        )
         flights, planes, airports, dist_dict = schedule
         dummy_env = AirlineEnv(
             flights,
@@ -137,6 +153,7 @@ def main() -> None:
             airports,
             penalty,
             f"iteration {i + 1}/{N_ITERATIONS}",
+            include_cplex=INCLUDE_CPLEX,
         )
         iter_viz[f"{i}"] = (training_scores, eval_results)
 

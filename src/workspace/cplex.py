@@ -1,18 +1,23 @@
-"""Standalone CPLEX aircraft assignment pipeline with env-style reward evaluation and Double DQN comparison."""
+"""Per-flight comparison of the optimal CPLEX baseline (src/baselines/cplex_solver.py) with a Double DQN
+trained on the same schedule."""
 
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from docplex.mp.model import Model
 
 from src.agents.dqn_agent import DoubleDQNAgent
+from src.baselines.cplex_solver import solve_assignment
 from src.config import MODEL_HYPERPARAMS, MODEL_TRAINING_PARAMS, REWARD_CONFIG
 from src.instances import build_flight_pool, build_planes, generate_random_flights
 from src.utils.dist import create_dist_dict_from_airports
 from src.utils.envs import AirlineEnv
-from src.utils.training_engine import initialize_agent, reset_agent_exploration, train_dqn_iteration
+from src.utils.training_engine import (
+    initialize_agent,
+    reset_agent_exploration,
+    train_dqn_iteration,
+)
 
 SCRIPT_DIR = str(Path.cwd())  # str(Path(__file__).resolve().parent)
 if SCRIPT_DIR in sys.path:
@@ -30,11 +35,6 @@ def resolve_project_root() -> Path:
 PROJECT_ROOT = resolve_project_root()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-
-TURNAROUND_TIME_MINS = 1
-PENALTY_PER_MIN = 150.0
-USE_DELAY_CLIPPING = True
 
 
 def _format_table_value(value: object) -> str:
@@ -94,7 +94,14 @@ def print_fleet_table(fleet: dict) -> None:
     print_pretty_table(
         "FLEET / PLANES",
         fleet_df,
-        columns=["plane", "initial_airport", "seats", "speed", "fixed_cost", "hourly_cost"],
+        columns=[
+            "plane",
+            "initial_airport",
+            "seats",
+            "speed",
+            "fixed_cost",
+            "hourly_cost",
+        ],
     )
 
 
@@ -108,12 +115,6 @@ def print_schedule_table(flights: list[dict], title: str = "PRESCHEDULE") -> Non
     available_columns = [col for col in columns if col in schedule_df.columns]
     schedule_df = schedule_df.loc[:, available_columns].sort_values(["start", "id"]).reset_index(drop=True)
     print_pretty_table(title, schedule_df, columns=available_columns)
-
-
-def get_flight_duration_mins(dist_km: float, speed_kmh: float) -> float:
-    if speed_kmh <= 0:
-        return 99999.0
-    return (dist_km / speed_kmh) * 60.0
 
 
 def replay_schedule_with_policy(
@@ -186,7 +187,10 @@ def build_schedule_pool(
         n=n,
         cities=cities,
         start_time_range=(flights_df.start_min.min(), flights_df.arrival_min.max()),
-        pass_range=(itineraries_df.total_passenger_count.min(), itineraries_df.total_passenger_count.max()),
+        pass_range=(
+            itineraries_df.total_passenger_count.min(),
+            itineraries_df.total_passenger_count.max(),
+        ),
     )
     synthetic_flights = [
         {
@@ -206,175 +210,6 @@ def build_schedule_pool(
         for f in synthetic_flights
     ]
     return synthetic_flights
-
-
-def solve_cplex_schedule(
-    flights: list[dict],
-    fleet: dict,
-    dist_matrix: dict,
-    penalty_per_min: float = PENALTY_PER_MIN,
-    use_delay_clipping: bool = USE_DELAY_CLIPPING,
-):
-    flight_costs: dict[tuple[str, int], float | None] = {}
-    flight_durations: dict[tuple[str, int], float] = {}
-    flight_dict = {f["id"]: f for f in flights}
-
-    for p_name, p_data in fleet.items():
-        for f in flights:
-            f_id = f["id"]
-            dist = dist_matrix.get((f["origin"], f["dest"]), 99999)
-            dur_mins = get_flight_duration_mins(dist, p_data["speed"])
-            flight_durations[(p_name, f_id)] = dur_mins
-
-            hours = dur_mins / 60.0
-            if p_data["seats"] >= f["pass"]:
-                flight_costs[(p_name, f_id)] = p_data["fixed_cost"] + (p_data["hourly_cost"] * hours)
-            else:
-                flight_costs[(p_name, f_id)] = None
-
-    m = Model(name="Aircraft_Assignment_and_Relocation")
-
-    x: dict[tuple[str, int], object] = {}
-    for p_name in fleet.keys():
-        for f in flights:
-            f_id = f["id"]
-            x[(p_name, f_id)] = m.binary_var(name=f"x_{p_name}_{f_id}")
-
-    transitions: list[tuple[str, int, int]] = []
-    transition_delay_penalties: dict[tuple[str, int, int], float] = {}
-    for p_name, p_data in fleet.items():
-        for f1 in flights:
-            for f2 in flights:
-                if f1["id"] != f2["id"] and f2["start"] >= f1["start"]:
-                    dist = dist_matrix.get((f1["dest"], f2["origin"]), 99999)
-                    travel_mins = get_flight_duration_mins(dist, p_data["speed"])
-                    f1_arr_time = f1["start"] + flight_durations[(p_name, f1["id"])]
-                    earliest_start = f1_arr_time + TURNAROUND_TIME_MINS + travel_mins
-                    actual_start = max(f2["start"], earliest_start)
-                    delay_minutes = max(0.0, actual_start - f2["start"])
-                    delay_multiplier = 1.0 + min(delay_minutes / 60.0, 2.0)
-                    delay_penalty = delay_minutes * f2["pass"] * penalty_per_min * delay_multiplier
-                    if use_delay_clipping:
-                        delay_penalty = min(delay_penalty, 20000.0)
-
-                    transition_delay_penalties[(p_name, f1["id"], f2["id"])] = delay_penalty
-                    transitions.append((p_name, f1["id"], f2["id"]))
-
-    y = m.binary_var_dict(transitions, name="y")
-
-    initial_transitions: list[tuple[str, int]] = []
-    initial_delay_penalties: dict[tuple[str, int], float] = {}
-    for p_name, p_data in fleet.items():
-        init_port = p_data["initial_airport"]
-        for f in flights:
-            dist = dist_matrix.get((init_port, f["origin"]), 99999)
-            travel_mins = get_flight_duration_mins(dist, p_data["speed"])
-            earliest_start = travel_mins
-            actual_start = max(f["start"], earliest_start)
-            delay_minutes = max(0.0, actual_start - f["start"])
-            delay_multiplier = 1.0 + min(delay_minutes / 60.0, 2.0)
-            delay_penalty = delay_minutes * f["pass"] * penalty_per_min * delay_multiplier
-            if use_delay_clipping:
-                delay_penalty = min(delay_penalty, 20000.0)
-
-            initial_delay_penalties[(p_name, f["id"])] = delay_penalty
-            initial_transitions.append((p_name, f["id"]))
-
-    z = m.binary_var_dict(initial_transitions, name="z")
-
-    for f in flights:
-        f_id = f["id"]
-        m.add_constraint(
-            m.sum(x[(p_name, f_id)] for p_name in fleet.keys() if (p_name, f_id) in x) == 1,
-            f"Cover_Flight_{f_id}",
-        )
-
-    for p_name in fleet.keys():
-        for f2 in flights:
-            target_f2_id = f2["id"]
-            if (p_name, target_f2_id) in x:
-                incoming_initial = z[(p_name, target_f2_id)] if (p_name, target_f2_id) in z else 0
-                incoming_transitions = m.sum(
-                    y[(p, f1_id, f2_id)] for (p, f1_id, f2_id) in transitions if p == p_name and f2_id == target_f2_id
-                )
-                m.add_constraint(
-                    incoming_initial + incoming_transitions == x[(p_name, target_f2_id)],
-                    f"Flow_In_{p_name}_{target_f2_id}",
-                )
-
-    for p_name in fleet.keys():
-        for f1 in flights:
-            f1_id = f1["id"]
-            if (p_name, f1_id) in x:
-                outgoing_transitions = m.sum(
-                    y[(p, src_f1_id, f2_id)]
-                    for (p, src_f1_id, f2_id) in transitions
-                    if p == p_name and src_f1_id == f1_id
-                )
-                m.add_constraint(outgoing_transitions <= x[(p_name, f1_id)], f"Flow_Out_{p_name}_{f1_id}")
-
-    assignment_expr = 0.0
-    relocation_penalty_expr = 0.0
-    delay_penalty_expr = 0.0
-    capacity_penalty_expr = 0.0
-
-    for p_name, f_id in x.keys():
-        flight = flight_dict[f_id]
-        assignment_cost = flight_costs[(p_name, f_id)]
-        if assignment_cost is None:
-            assignment_cost = 1e8
-        capacity_slack = max(0.0, float(fleet[p_name]["seats"]) - float(flight["pass"])) / max(
-            1.0, float(flight["pass"])
-        )
-        capacity_penalty = 500.0 * capacity_slack
-        revenue = float(flight.get("total_ticket_price", 0.0))
-        assignment_expr += (assignment_cost + capacity_penalty - revenue) * x[(p_name, f_id)]
-
-    for p_name, f1_id, f2_id in transitions:
-        f1_dest = flight_dict[f1_id]["dest"]
-        f2_orig = flight_dict[f2_id]["origin"]
-        dist = dist_matrix.get((f1_dest, f2_orig), 0)
-        hours = dist / fleet[p_name]["speed"]
-        relocation_penalty = 0.05 * dist
-        relocation_penalty_expr += (hours * fleet[p_name]["hourly_cost"] * 0.7 + relocation_penalty) * y[
-            (p_name, f1_id, f2_id)
-        ]
-        delay_penalty_expr += transition_delay_penalties[(p_name, f1_id, f2_id)] * y[(p_name, f1_id, f2_id)]
-
-    for p_name, f_id in initial_transitions:
-        delay_penalty_expr += initial_delay_penalties[(p_name, f_id)] * z[(p_name, f_id)]
-
-    m.minimize(assignment_expr + relocation_penalty_expr + delay_penalty_expr + capacity_penalty_expr)
-
-    solution = m.solve()
-    if not solution:
-        return None, None, None
-
-    assigned_plane_by_flight_id = {}
-    for f in flights:
-        f_id = f["id"]
-        for p_name in fleet.keys():
-            if (p_name, f_id) in x and solution.get_value(x[(p_name, f_id)]) > 0.5:
-                assigned_plane_by_flight_id[f_id] = p_name
-                break
-
-    assigned_records = []
-    for f in flights:
-        f_id = f["id"]
-        assigned_plane = assigned_plane_by_flight_id.get(f_id, "Unassigned")
-        is_initial_start = False
-        if (
-            assigned_plane != "Unassigned"
-            and (assigned_plane, f_id) in z
-            and solution.get_value(z[(assigned_plane, f_id)]) > 0.5
-        ):
-            is_initial_start = True
-        record = f.copy()
-        record["assigned_plane"] = assigned_plane
-        record["is_initial_hub_start"] = is_initial_start
-        assigned_records.append(record)
-
-    return assigned_records, float(solution.objective_value), assigned_plane_by_flight_id
 
 
 def evaluate_schedule_with_env(
@@ -491,25 +326,37 @@ if __name__ == "__main__":
     print_schedule_table(flights, title="PRESCHEDULE")
     print_fleet_table(fleet)
 
-    assigned_records, objective_value, assigned_plane_by_flight_id = solve_cplex_schedule(
+    plan = solve_assignment(
         flights,
         fleet,
         dist_matrix,
         penalty_per_min=REWARD_CONFIG["penalty_per_min"],
-        use_delay_clipping=REWARD_CONFIG["train_use_clipping"],
+        use_clipping=REWARD_CONFIG["train_use_clipping"],
     )
-
-    if assigned_records is None or assigned_plane_by_flight_id is None:
-        print("No feasible schedule found matching the time/capacity constraints.")
-        sys.exit(0)
+    objective_value = plan.objective
+    assigned_plane_by_flight_id = {f["id"]: plane for f, plane in zip(flights, plan.planes)}
+    assigned_records = [
+        {**f, "assigned_plane": plane, "is_initial_hub_start": from_home}
+        for f, plane, from_home in zip(flights, plan.planes, plan.starts_from_home)
+    ]
 
     schedule_df = pd.DataFrame(assigned_records)
     print_pretty_table(
         "FINAL ASSIGNED SCHEDULE",
         schedule_df,
-        columns=["id", "origin", "dest", "start", "pass", "assigned_plane", "is_initial_hub_start"],
+        columns=[
+            "id",
+            "origin",
+            "dest",
+            "start",
+            "pass",
+            "assigned_plane",
+            "is_initial_hub_start",
+        ],
     )
-    print(f"\nOptimal CPLEX objective: ${objective_value:,.2f}\n")
+    print(
+        f"\nOptimal CPLEX objective (= -env reward): {objective_value:,.2f}  -> optimal env reward {-objective_value:,.2f}\n"
+    )
 
     env_reward, _ = evaluate_schedule_with_env(
         assigned_records,
@@ -551,10 +398,20 @@ if __name__ == "__main__":
 
     comparison_df = cplex_breakdown["breakdown"][
         ["flight_id", "plane", "reward", "delay_minutes", "actual_start"]
-    ].rename(columns={"plane": "cplex_plane", "reward": "cplex_reward", "delay_minutes": "cplex_delay_minutes"})
+    ].rename(
+        columns={
+            "plane": "cplex_plane",
+            "reward": "cplex_reward",
+            "delay_minutes": "cplex_delay_minutes",
+        }
+    )
     comparison_df = comparison_df.merge(
         ddqn_breakdown[["flight_id", "plane", "reward", "delay_minutes", "actual_start"]].rename(
-            columns={"plane": "ddqn_plane", "reward": "ddqn_reward", "delay_minutes": "ddqn_delay_minutes"}
+            columns={
+                "plane": "ddqn_plane",
+                "reward": "ddqn_reward",
+                "delay_minutes": "ddqn_delay_minutes",
+            }
         ),
         on="flight_id",
         how="left",

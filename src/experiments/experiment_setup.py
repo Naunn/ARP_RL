@@ -8,11 +8,12 @@ them, so each experiment script only differs in the loop it builds around them.
 
 import copy
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 import torch
 
 from src.agents.dqn_agent import DoubleDQNAgent, DQNAgent
+from src.baselines import BaselineSolverError
 from src.config import (
     AGENT_VARIANT_OVERRIDES,
     DISRUPTION_ACTIONS_CONFIG,
@@ -130,16 +131,82 @@ def print_results_table(results: Dict[str, Tuple[float, float]], name: str) -> N
     logger.info("\n".join(rows))
 
 
-def build_solvers(agents: AgentTable) -> Dict[str, Any]:
-    """Baselines plus one DQNSolver per (variant, algo) agent currently built."""
+CPLEX_LABEL = "CPLEX (optimal)"
+
+
+def baseline_solvers(include_cplex: bool = False) -> Dict[str, Any]:
+    """Random and Greedy baselines, plus the optimal CPLEX baseline if include_cplex."""
     solvers: Dict[str, Any] = {
         "Random Baseline": RandomSolver(),
         "Greedy Baseline": ClosestPlaneGreedySolver(),
     }
+    if include_cplex:
+        from src.baselines.cplex_solver import CplexSolver  # optional dependency: `uv sync --extra cplex`
+
+        solvers[CPLEX_LABEL] = CplexSolver()
+    return solvers
+
+
+def build_solvers(agents: AgentTable, include_cplex: bool = False) -> Dict[str, Any]:
+    """Baselines plus one DQNSolver per (variant, algo) agent currently built."""
+    solvers = baseline_solvers(include_cplex)
     for variant, by_algo in agents.items():
         for algo, agent in by_algo.items():
             solvers[variant_label(variant, algo)] = DQNSolver(agent)
     return solvers
+
+
+def make_eval_env(
+    flights: List[Dict[str, Any]],
+    planes: Dict[str, Any],
+    dist_dict: Dict[Any, float],
+    airports: List[str],
+    penalty_per_min: int,
+) -> AirlineEnv:
+    """The environment every method is evaluated (and the CPLEX baseline solved) in."""
+    return AirlineEnv(
+        flights, planes, dist_dict, airports, penalty_per_min, use_clipping=REWARD_CONFIG["final_eval_use_clipping"]
+    )
+
+
+Schedule = Tuple[List[Dict[str, Any]], Dict[str, Any], List[str], Dict[Any, float]]  # flights, planes, airports, dist
+
+MAX_SCHEDULE_ATTEMPTS = 10
+# Seed offset between retry attempts, so a retried schedule never repeats another iteration's seed.
+RETRY_SEED_STRIDE = 1_000_003
+
+
+def build_schedule_with_retries(
+    build: Callable[[int], Schedule],
+    penalty_per_min: int,
+    include_cplex: bool,
+    label: str,
+    max_attempts: int = MAX_SCHEDULE_ATTEMPTS,
+) -> Schedule:
+    """Builds a schedule with build(attempt) and, if include_cplex, solves the CPLEX baseline on it
+    right away (the plan is cached for the later evaluation). If the solver fails on that schedule,
+    `build` is called again with the next attempt number for a fresh schedule, so the experiment's
+    current iteration is retried rather than lost -- and before any training time is spent on it.
+    Non-retryable failures (e.g. the CPLEX edition's size limit) are raised immediately.
+    """
+    for attempt in range(max_attempts):
+        schedule = build(attempt)
+        if not include_cplex:
+            return schedule
+        from src.baselines.cplex_solver import plan_schedule  # optional dependency: `uv sync --extra cplex`
+
+        flights, planes, airports, dist_dict = schedule
+        try:
+            plan_schedule(make_eval_env(flights, planes, dist_dict, airports, penalty_per_min))
+            return schedule
+        except BaselineSolverError as e:
+            if not e.retryable:
+                raise
+            logger.warning(
+                f"{label}: CPLEX baseline failed on schedule attempt {attempt + 1}/{max_attempts} ({e}); "
+                "drawing a new schedule for the same iteration"
+            )
+    raise BaselineSolverError(f"{label}: CPLEX baseline failed on {max_attempts} schedules in a row", retryable=False)
 
 
 def evaluate_models_on_schedule(
@@ -151,19 +218,13 @@ def evaluate_models_on_schedule(
     penalty_per_min: int,
     eval_label: str,
     show_schedule: bool = False,
+    include_cplex: bool = False,
 ) -> Dict[str, Tuple[float, float]]:
     """Evaluates every current solver (baselines + all built agent variants) on one schedule."""
-    eval_env = AirlineEnv(
-        schedule_flights,
-        planes,
-        dist_dict,
-        airports,
-        penalty_per_min,
-        use_clipping=REWARD_CONFIG["final_eval_use_clipping"],
-    )
+    eval_env = make_eval_env(schedule_flights, planes, dist_dict, airports, penalty_per_min)
     results = {
         name: evaluate_agent_performance(eval_env, solver, name, show_schedule)
-        for name, solver in build_solvers(agents).items()
+        for name, solver in build_solvers(agents, include_cplex).items()
     }
     print_results_table(results, eval_label)
     return results

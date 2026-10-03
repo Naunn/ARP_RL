@@ -40,8 +40,8 @@ MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
 }
 
 MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
-    "DQN": {"n_episodes": 500, "log_interval": 10},
-    "DOUBLE_DQN": {"n_episodes": 500, "log_interval": 10},
+    "DQN": {"n_episodes": 1000, "log_interval": 10},
+    "DOUBLE_DQN": {"n_episodes": 1000, "log_interval": 10},
 }
 
 # Ablation variants compared across experiments: each maps to hyperparameter overrides applied

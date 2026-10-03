@@ -15,6 +15,7 @@ import pandas as pd
 from src.config import N_ITERATIONS, REWARD_CONFIG
 from src.config import SEED as DEFAULT_SEED
 from src.experiments.experiment_setup import (
+    build_schedule_with_retries,
     build_variant_agents,
     evaluate_models_on_schedule,
     resolve_project_root,
@@ -38,6 +39,10 @@ C_N = 4  # 3 for testing random + trap (100 iter); for sampled does not matter
 P_N = 4  # 2 for testing random + trap (100 iter); round(aircraft_df.shape[0]/3) for sampled - too long for 100 iter :(
 TRAP = False
 
+# Also evaluate the optimal CPLEX baseline (src/baselines/cplex_solver.py) as a reference. Needs
+# `uv sync --extra cplex`; the free CPLEX edition only handles ~10-12 flights with 3 planes.
+INCLUDE_CPLEX = False
+
 
 def main() -> None:
     seed = set_seed(SEED)
@@ -50,6 +55,7 @@ def main() -> None:
             "n_cities": C_N,
             "n_planes": P_N,
             "trap": TRAP,
+            "include_cplex": INCLUDE_CPLEX,
             "n_iterations": N_ITERATIONS,
         },
         seed,
@@ -66,36 +72,45 @@ def main() -> None:
     iter_viz: Dict[str, Any] = {}
     for i in range(N_ITERATIONS):
         log_section(f"ITERATION {i + 1}/{N_ITERATIONS}")
-        flights = build_flight_pool(flights_df.sample(N).sort_values("start_min", ascending=True), itineraries_df)
 
-        schedule_generator = generate_trap_schedule if TRAP else generate_random_flights
-        samp_flights = pd.DataFrame(
-            schedule_generator(
-                n=N,
-                cities=list(np.random.choice(flights_df.origin.unique(), C_N)),
-                start_time_range=(flights_df.start_min.min(), flights_df.arrival_min.max()),
-                pass_range=(
-                    itineraries_df.total_passenger_count.min(),
-                    itineraries_df.total_passenger_count.max(),
-                ),
+        def build_instance(_attempt: int):
+            flights = build_flight_pool(flights_df.sample(N).sort_values("start_min", ascending=True), itineraries_df)
+
+            schedule_generator = generate_trap_schedule if TRAP else generate_random_flights
+            samp_flights = pd.DataFrame(
+                schedule_generator(
+                    n=N,
+                    cities=list(np.random.choice(flights_df.origin.unique(), C_N)),
+                    start_time_range=(flights_df.start_min.min(), flights_df.arrival_min.max()),
+                    pass_range=(
+                        itineraries_df.total_passenger_count.min(),
+                        itineraries_df.total_passenger_count.max(),
+                    ),
+                )
             )
-        )
-        samp_flights["total_ticket_price"] = samp_flights["pass"] * np.average(
-            pd.DataFrame(flights)["total_ticket_price"] / pd.DataFrame(flights)["pass"],
-            weights=pd.DataFrame(flights)["pass"],
-        )
-        # NOTE: `flights` intentionally stays the real-data-sampled pool here rather than the
-        # synthetic `samp_flights` schedule generated above (that generated schedule currently goes
-        # unused) -- carried over as-is from the prior version of this script; worth confirming
-        # this is the intended instance source before relying on results from this script.
+            samp_flights["total_ticket_price"] = samp_flights["pass"] * np.average(
+                pd.DataFrame(flights)["total_ticket_price"] / pd.DataFrame(flights)["pass"],
+                weights=pd.DataFrame(flights)["pass"],
+            )
+            # NOTE: `flights` intentionally stays the real-data-sampled pool here rather than the
+            # synthetic `samp_flights` schedule generated above (that generated schedule currently goes
+            # unused) -- carried over as-is from the prior version of this script; worth confirming
+            # this is the intended instance source before relying on results from this script.
 
-        planes = build_planes(aircraft_df.sample(P_N))
-        airports = sorted(
-            {f["origin"] for f in flights}
-            | {f["dest"] for f in flights}
-            | {p["initial_airport"] for p in planes.values()}
+            planes = build_planes(aircraft_df.sample(P_N))
+            airports = sorted(
+                {f["origin"] for f in flights}
+                | {f["dest"] for f in flights}
+                | {p["initial_airport"] for p in planes.values()}
+            )
+            dist_dict = create_dist_dict_from_airports(airports_list=airports)
+            return flights, planes, airports, dist_dict
+
+        # If the CPLEX baseline is included and fails on an instance, a new one is sampled for the
+        # same iteration before any training happens on it.
+        flights, planes, airports, dist_dict = build_schedule_with_retries(
+            build_instance, penalty, INCLUDE_CPLEX, label=f"iteration {i + 1}"
         )
-        dist_dict = create_dist_dict_from_airports(airports_list=airports)
 
         dummy_env = AirlineEnv(
             flights=flights,
@@ -113,7 +128,14 @@ def main() -> None:
             agents, flights, planes, dist_dict, airports, penalty, meta_dims, run.checkpoint_dir, 1, f"iter{i + 1}"
         )
         eval_results = evaluate_models_on_schedule(
-            agents, flights, planes, dist_dict, airports, penalty, f"iteration {i + 1}/{N_ITERATIONS}"
+            agents,
+            flights,
+            planes,
+            dist_dict,
+            airports,
+            penalty,
+            f"iteration {i + 1}/{N_ITERATIONS}",
+            include_cplex=INCLUDE_CPLEX,
         )
         iter_viz[f"{i}"] = (training_scores, eval_results)
 

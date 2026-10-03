@@ -20,6 +20,9 @@ from src.analysis.plots import plot_training_curve
 from src.config import AGENT_VARIANT_OVERRIDES, MODEL_HYPERPARAMS, REWARD_CONFIG
 from src.experiments.experiment_setup import (
     AGENT_CLASSES,
+    RETRY_SEED_STRIDE,
+    baseline_solvers,
+    build_schedule_with_retries,
     evaluate_agent_performance,
     print_results_table,
     resolve_project_root,
@@ -32,9 +35,7 @@ from src.instances import (
     load_roadef_instance,
 )
 from src.utils import (
-    ClosestPlaneGreedySolver,
     DQNSolver,
-    RandomSolver,
     get_model_filename,
     initialize_agent,
     log_subsection,
@@ -77,6 +78,10 @@ N_EPISODES = 1000  # how long to train for; MODEL_TRAINING_PARAMS[ALGO]["n_episo
 
 # One-off agent hyperparameter overrides on top of MODEL_HYPERPARAMS[ALGO] + AGENT_VARIANT_OVERRIDES[VARIANT],
 # for quick tweaks without touching config.py. Leave empty to just use the variant as-is.
+# Also evaluate the optimal CPLEX baseline (src/baselines/cplex_solver.py) as a reference. Needs
+# `uv sync --extra cplex`; the free CPLEX edition only handles ~10-12 flights with 3 planes.
+INCLUDE_CPLEX = False
+
 CUSTOM_OVERRIDES = {
     # "hidden_dim": 512,
     # "lr": 1e-4,
@@ -104,6 +109,7 @@ def main() -> None:
             "variant": VARIANT,
             "n_episodes": N_EPISODES,
             "custom_overrides": CUSTOM_OVERRIDES,
+            "include_cplex": INCLUDE_CPLEX,
             "effective_hyperparams": hyperparams,
         },
         seed,
@@ -118,15 +124,22 @@ def main() -> None:
     logger.info(
         f"Instance {INSTANCE_NAME} (full): {len(base[0])} flights, {len(base[1])} aircraft, {len(base[2])} airports"
     )
-    flights, planes, airports, dist_dict = build_schedule(
-        base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed
+    penalty = REWARD_CONFIG["penalty_per_min"]
+    # If the CPLEX baseline is included and fails on the schedule, a new one is drawn (next
+    # attempt's seed) before any training happens on it.
+    flights, planes, airports, dist_dict = build_schedule_with_retries(
+        lambda attempt: build_schedule(
+            base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed + attempt * RETRY_SEED_STRIDE
+        ),
+        penalty,
+        INCLUDE_CPLEX,
+        label="schedule",
     )
     logger.info(
         f"Using {SCHEDULE_TYPE} schedule: {len(flights)} flights, {len(planes)} aircraft, {len(airports)} airports"
     )
     schedule_label = f"{INSTANCE_NAME}_{SCHEDULE_TYPE}"
 
-    penalty = REWARD_CONFIG["penalty_per_min"]
     train_env = AirlineEnv(
         flights,
         planes,
@@ -176,11 +189,7 @@ def main() -> None:
         penalty,
         use_clipping=REWARD_CONFIG["final_eval_use_clipping"],
     )
-    solvers = {
-        "Random Baseline": RandomSolver(),
-        "Greedy Baseline": ClosestPlaneGreedySolver(),
-        agent_label: DQNSolver(agent),
-    }
+    solvers = {**baseline_solvers(INCLUDE_CPLEX), agent_label: DQNSolver(agent)}
     eval_results = {name: evaluate_agent_performance(eval_env, solver, name) for name, solver in solvers.items()}
     print_results_table(eval_results, f"{schedule_label}, after training")
 

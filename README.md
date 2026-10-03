@@ -14,7 +14,7 @@ This repository contains:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv
 uv sync                                            # install dependencies
-uv sync --extra cplex                              # optional: exact MILP baseline (src/workspace/cplex.py)
+uv sync --extra cplex                              # optional: optimal CPLEX baseline (src/baselines/)
 uv run python -m src.experiments.single_model_experiment
 ```
 
@@ -50,6 +50,27 @@ Every run writes to `runs/<timestamp>_<name>/` (gitignored):
 - `results.pkl` — the raw results (what the analysis scripts read)
 - `metrics.json` — a short human-readable summary (where the experiment provides one)
 - `checkpoints/` — model weights from this run
+
+## Baselines
+
+Every evaluation compares the agents with a Random and a Greedy baseline. Setting `INCLUDE_CPLEX =
+True` in an experiment script also adds **`CPLEX (optimal)`**: `src/baselines/cplex_solver.py`, an
+exact CPLEX model of `AirlineEnv`'s reward that finds the best possible plane assignment for each
+schedule (needs `uv sync --extra cplex`; the free CPLEX edition handles ~10-12 flights with 3
+planes).
+
+- Every plan CPLEX produces is replayed through the real environment; if the reward differs from
+  what CPLEX predicted, it's treated as a solver failure rather than used.
+- If CPLEX fails on a schedule, the experiment draws a new schedule for the same iteration (before
+  training on it) instead of crashing; failures retrying can't fix, like the license size limit,
+  stop the run with a clear message.
+- To check for yourself that the model is aligned with the environment and truly optimal, run
+  `python -m src.baselines.verify_cplex` (options: `--cases`, `--flights`, `--planes`). It compares
+  CPLEX's predicted reward with the env's reward for its plan, and with the best of *every* possible
+  assignment, enumerated through the env alone.
+- Reward constants and the empty-seat formula live at the top of `src/utils/envs.py` and are shared
+  with the CPLEX model; any other change to `AirlineEnv.step()` must be mirrored in
+  `src/baselines/cplex_solver.py` (the replay check and the verifier will flag it if not).
 
 ## Analysis
 
@@ -93,7 +114,8 @@ dist_dict inputs `AirlineEnv` expects:
 	- `disruptions.py`: disruption injection
 	- `seeding.py`: `set_seed`
 	- `dist.py`: geodesic airport distances; `data_prep.py`: raw ROADEF table readers
-- `src/workspace/cplex.py` — exact CPLEX baseline (needs `uv sync --extra cplex`)
+- `src/baselines/` — the optimal CPLEX baseline and its verifier (see *Baselines*)
+- `src/workspace/cplex.py` — per-flight CPLEX vs. Double DQN comparison script
 
 ## Linting and Checks
 

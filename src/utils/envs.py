@@ -7,6 +7,23 @@ import numpy as np
 
 from src.utils.logging import log_subsection, logger
 
+# Reward-function constants. The exact CPLEX model (src/workspace/cplex.py) imports these, so any
+# change here is automatically reflected there.
+DEFAULT_DIST_KM = 500.0  # distance assumed for airport pairs missing from dist_dict
+RELOCATION_PENALTY_PER_KM = 0.05
+DELAY_PENALTY_CAP = 20000.0  # per-flight delay penalty cap when use_clipping
+REWARD_FLOOR = -30000.0  # per-flight reward floor when use_clipping
+
+
+def capacity_slack_penalty(flight: dict, seats: float) -> float:
+    """Revenue lost to empty seats: average fare per passenger * number of empty seats."""
+    # previous version: 500.0 * max(0.0, seats - pass) / max(1.0, pass)
+    return (
+        (flight.get("total_ticket_price", 0.0) / flight.get("pass", 1))  # average ticket price per passenger
+        * max(0.0, float(seats) - float(flight.get("pass", 1)))  # number of empty seats
+        # * 100  # additional penalty factor for empty seats
+    )
+
 
 class AirlineEnv:
     def __init__(
@@ -48,12 +65,12 @@ class AirlineEnv:
         self.city_one_hot_eye = np.eye(self.num_cities, dtype=np.float32)  # identity matrix
 
         # Dense copy of dist_dict for vectorized per-plane lookups. Missing pairs (and cities absent
-        # from both the instance and dist_dict, mapped to the extra last slot) keep the 500 km
-        # default that dist_dict.get(..., 500) uses elsewhere in this class.
+        # from both the instance and dist_dict, mapped to the extra last slot) keep the
+        # DEFAULT_DIST_KM that dist_dict.get(..., DEFAULT_DIST_KM) uses elsewhere in this class.
         dist_cities = sorted(set(self.cities) | {a for a, _ in dist_dict} | {b for _, b in dist_dict})
         self._dist_idx = {city: i for i, city in enumerate(dist_cities)}
         self._unknown_city_idx = len(dist_cities)
-        self._dist_matrix = np.full((len(dist_cities) + 1, len(dist_cities) + 1), 500.0)
+        self._dist_matrix = np.full((len(dist_cities) + 1, len(dist_cities) + 1), DEFAULT_DIST_KM)
         for (origin, dest), dist in dist_dict.items():
             self._dist_matrix[self._dist_idx[origin], self._dist_idx[dest]] = dist
 
@@ -197,8 +214,8 @@ class AirlineEnv:
         p_cfg = self.plane_configs[p_name]
 
         p_free_time, p_loc = self.times[action_idx], self.locs[action_idx]
-        reloc_dist = self.dist_dict.get((p_loc, f["origin"]), 500)
-        flight_dist = self.dist_dict.get((f["origin"], f["dest"]), 500)
+        reloc_dist = self.dist_dict.get((p_loc, f["origin"]), DEFAULT_DIST_KM)
+        flight_dist = self.dist_dict.get((f["origin"], f["dest"]), DEFAULT_DIST_KM)
 
         actual_start = max(f["start"], p_free_time + (reloc_dist / (p_cfg["speed"] / 60)))
         arrival_at_dest = actual_start + (flight_dist / (p_cfg["speed"] / 60))
@@ -216,22 +233,17 @@ class AirlineEnv:
         delay_minutes = max(0.0, actual_start - f["start"])
         delay_multiplier = 1.0 + min(delay_minutes / 60.0, 2.0)
         delay_penalty = delay_minutes * f["pass"] * self.penalty_per_min * delay_multiplier
-        capacity_slack_penalty = (
-            # 500.0 * max(0.0, float(p_cfg["seats"]) - float(f.get("pass", 1))) / max(1.0, float(f.get("pass", 1)))
-            (f.get("total_ticket_price", 0.0) / f.get("pass", 1))  # average ticket price per passenger
-            * max(0.0, float(p_cfg["seats"]) - float(f.get("pass", 1)))  # number of empty seats
-            # * 100  # additional penalty factor for empty seats
-        )
-        relocation_penalty = 0.05 * reloc_dist
+        slack_penalty = capacity_slack_penalty(f, p_cfg["seats"])
+        relocation_penalty = RELOCATION_PENALTY_PER_KM * reloc_dist
         reward = (
             revenue
             - assignment_cost
-            - (min(delay_penalty, 20000.0) if self.use_clipping else delay_penalty)
+            - (min(delay_penalty, DELAY_PENALTY_CAP) if self.use_clipping else delay_penalty)
             - relocation_penalty
-            - capacity_slack_penalty
+            - slack_penalty
         )
         if self.use_clipping:
-            reward = max(-30000.0, reward)
+            reward = max(REWARD_FLOOR, reward)
 
         # Apply structural mutations safely across elements
         new_times, new_locs, new_used = (
@@ -263,7 +275,7 @@ class AirlineEnv:
                 "delay_minutes": delay_minutes,
                 "delay_penalty": delay_penalty,
                 # "served_ratio": served_ratio,
-                "capacity_slack_penalty": capacity_slack_penalty,
+                "capacity_slack_penalty": slack_penalty,
                 "relocation_penalty": relocation_penalty,
             },
         )
