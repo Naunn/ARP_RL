@@ -59,6 +59,11 @@ exact CPLEX model of `AirlineEnv`'s reward that finds the best possible plane as
 schedule (needs `uv sync --extra cplex`; the free CPLEX edition handles ~10-12 flights with 3
 planes).
 
+- Only plans CPLEX has *proven* optimal are used (within `CPLEX_CONFIG["time_limit_s"]`, in
+  `src/config.py`). Proving optimality gets hard fast: ~10 flights take about a second, 20 flights x
+  3 planes may not finish in minutes. Set `CPLEX_CONFIG["require_optimal"] = False` to use CPLEX's
+  best plan within the time limit instead, reported as `CPLEX (best found)` -- an upper reference,
+  not a guaranteed optimum, so a trained agent can legitimately beat it.
 - Every plan CPLEX produces is replayed through the real environment; if the reward differs from
   what CPLEX predicted, it's treated as a solver failure rather than used.
 - If CPLEX fails on a schedule, the experiment draws a new schedule for the same iteration (before

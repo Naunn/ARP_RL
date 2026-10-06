@@ -16,6 +16,7 @@ from src.agents.dqn_agent import DoubleDQNAgent, DQNAgent
 from src.baselines import BaselineSolverError
 from src.config import (
     AGENT_VARIANT_OVERRIDES,
+    CPLEX_CONFIG,
     DISRUPTION_ACTIONS_CONFIG,
     MODEL_HYPERPARAMS,
     MODEL_TRAINING_PARAMS,
@@ -131,7 +132,8 @@ def print_results_table(results: Dict[str, Tuple[float, float]], name: str) -> N
     logger.info("\n".join(rows))
 
 
-CPLEX_LABEL = "CPLEX (optimal)"
+# Only proven-optimal plans are accepted unless CPLEX_CONFIG["require_optimal"] is False.
+CPLEX_LABEL = "CPLEX (optimal)" if CPLEX_CONFIG["require_optimal"] else "CPLEX (best found)"
 
 
 def baseline_solvers(include_cplex: bool = False) -> Dict[str, Any]:
@@ -189,6 +191,7 @@ def build_schedule_with_retries(
     current iteration is retried rather than lost -- and before any training time is spent on it.
     Non-retryable failures (e.g. the CPLEX edition's size limit) are raised immediately.
     """
+    last_error: BaselineSolverError | None = None
     for attempt in range(max_attempts):
         schedule = build(attempt)
         if not include_cplex:
@@ -197,16 +200,25 @@ def build_schedule_with_retries(
 
         flights, planes, airports, dist_dict = schedule
         try:
-            plan_schedule(make_eval_env(flights, planes, dist_dict, airports, penalty_per_min))
-            return schedule
+            plan = plan_schedule(make_eval_env(flights, planes, dist_dict, airports, penalty_per_min))
         except BaselineSolverError as e:
             if not e.retryable:
                 raise
+            last_error = e
             logger.warning(
                 f"{label}: CPLEX baseline failed on schedule attempt {attempt + 1}/{max_attempts} ({e}); "
                 "drawing a new schedule for the same iteration"
             )
-    raise BaselineSolverError(f"{label}: CPLEX baseline failed on {max_attempts} schedules in a row", retryable=False)
+            continue
+        outcome = "proven optimal" if plan.proven_optimal else f"best found, not proven (gap {plan.gap:.0%})"
+        logger.info(f"CPLEX baseline: {outcome} in {plan.solve_seconds:.1f}s, reward {plan.predicted_reward:,.0f}")
+        return schedule
+    raise BaselineSolverError(
+        f"{label}: CPLEX baseline failed on {max_attempts} schedules in a row (last: {last_error}). If CPLEX keeps "
+        "missing its time limit, the schedules are too large to prove optimal: reduce MAX_FLIGHTS / MAX_PLANES, "
+        'raise CPLEX_CONFIG["time_limit_s"], or set CPLEX_CONFIG["require_optimal"] = False to accept its best plan.',
+        retryable=False,
+    ) from last_error
 
 
 def evaluate_models_on_schedule(

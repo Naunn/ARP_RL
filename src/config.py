@@ -5,9 +5,9 @@ from typing import Any, Dict
 # Default RNG seed for every experiment (each script can override it with its own SEED knob).
 # An int makes reruns reproduce the same schedules/results; None draws a fresh seed every run
 # (genuinely new schedules) -- the seed used is still recorded in the run's config.json.
-SEED: int | None = 42
+SEED: int | None = None
 
-N_ITERATIONS: int = 5
+N_ITERATIONS: int = 3
 
 # --- STRUCTURAL CONFIGURATIONS ---
 MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
@@ -40,8 +40,8 @@ MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
 }
 
 MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
-    "DQN": {"n_episodes": 1000, "log_interval": 10},
-    "DOUBLE_DQN": {"n_episodes": 1000, "log_interval": 10},
+    "DQN": {"n_episodes": 500, "log_interval": 10},
+    "DOUBLE_DQN": {"n_episodes": 500, "log_interval": 10},
 }
 
 # Ablation variants compared across experiments: each maps to hyperparameter overrides applied
@@ -89,3 +89,14 @@ EARLY_STOPPING_CONFIG: Dict[str, Any] = {
 
 # Every experiment run writes its config, log, results, and checkpoints to RUNS_DIR/<run_id>/.
 RUNS_DIR: str = "runs"
+
+# CPLEX baseline (src/baselines/cplex_solver.py), used when an experiment sets INCLUDE_CPLEX.
+CPLEX_CONFIG: Dict[str, Any] = {
+    # Max seconds per schedule. Small schedules (~10 flights) are proven optimal in about a second;
+    # ~20 flights x 3 planes can need far longer than any reasonable limit.
+    "time_limit_s": 180,
+    # True: only a plan CPLEX has PROVEN optimal is accepted (reported as "CPLEX (optimal)");
+    # otherwise the schedule counts as a solver failure and the experiment retries with a new one.
+    # False: CPLEX's best plan within the time limit is accepted (reported as "CPLEX (best found)").
+    "require_optimal": True,
+}

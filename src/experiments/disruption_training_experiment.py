@@ -49,23 +49,23 @@ SEED = None  # DEFAULT_SEED
 INSTANCE_NAME = "A01_6088570"
 
 # "sample" (real flights) / "random" / "trap" -- see src/instances/scenarios.py
-SCHEDULE_TYPE = "random"
+SCHEDULE_TYPE = "trap"
 N_CITIES = 3  # "random"/"trap" only (trap needs >= 3)
-MAX_FLIGHTS = 15  # None = full instance
-MAX_PLANES = 2  # None = full instance
+MAX_FLIGHTS = 20  # None = full instance
+MAX_PLANES = 3  # None = full instance
 
 # Methods to compare, besides the Random/Greedy baselines that are always evaluated.
-ACTIVE_ALGOS = ["DQN", "DOUBLE_DQN"]  # any of AGENT_CLASSES in experiment_setup.py
+ACTIVE_ALGOS = ["DOUBLE_DQN"]  # any of AGENT_CLASSES in experiment_setup.py
 ACTIVE_VARIANTS = ["idle"]  # any of config.AGENT_VARIANT_OVERRIDES
 
-N_RUNS = 5  # independent schedules, each put through the full train -> disrupt/retrain cycle
+N_RUNS = 1  # independent schedules, each put through the full train -> disrupt/retrain cycle
 N_DISRUPTIONS = DEFAULT_N_DISRUPTIONS  # disrupt -> retrain rounds per run
 N_EPISODES = None  # episodes for the initial training; None = MODEL_TRAINING_PARAMS default per algo
 N_RETRAIN_EPISODES = None  # episodes for each retraining on a disruption; None = same as N_EPISODES
 
 # Also evaluate the optimal CPLEX baseline (src/baselines/cplex_solver.py) as a reference. Needs
 # `uv sync --extra cplex`; the free CPLEX edition only handles ~10-12 flights with 3 planes.
-INCLUDE_CPLEX = False
+INCLUDE_CPLEX = True
 
 # ============================================================================
 
@@ -105,7 +105,12 @@ def main() -> None:
         # same run (next attempt's seed) before any training happens on it.
         flights, planes, airports, dist_dict = build_schedule_with_retries(
             lambda attempt: build_schedule(
-                base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed + i + attempt * RETRY_SEED_STRIDE
+                base,
+                SCHEDULE_TYPE,
+                MAX_FLIGHTS,
+                MAX_PLANES,
+                N_CITIES,
+                seed=seed + i + attempt * RETRY_SEED_STRIDE,
             ),
             penalty,
             INCLUDE_CPLEX,
@@ -130,7 +135,14 @@ def main() -> None:
 
         def evaluate(schedule: List[Dict[str, Any]], label: str) -> Dict[str, tuple]:
             return evaluate_models_on_schedule(
-                agents, schedule, planes, dist_dict, airports, penalty, label, include_cplex=INCLUDE_CPLEX
+                agents,
+                schedule,
+                planes,
+                dist_dict,
+                airports,
+                penalty,
+                label,
+                include_cplex=INCLUDE_CPLEX,
             )
 
         def train(schedule: List[Dict[str, Any]], phase_name: str, n_episodes: int | None) -> None:
@@ -166,7 +178,10 @@ def main() -> None:
             # A disruption the CPLEX baseline fails on is replaced by a newly generated one.
             disrupted, _, _, _ = build_schedule_with_retries(
                 lambda _attempt: (
-                    cast(List[Dict[str, Any]], dg.generate(flights, actions=build_disruption_actions(len(flights)))),
+                    cast(
+                        List[Dict[str, Any]],
+                        dg.generate(flights, actions=build_disruption_actions(len(flights))),
+                    ),
                     planes,
                     airports,
                     dist_dict,

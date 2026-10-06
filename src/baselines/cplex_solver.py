@@ -27,8 +27,11 @@ schedule and replays each new plan through the real environment, raising Baselin
 the reward differs from the prediction -- so a mis-solve, or an AirlineEnv reward change that this
 model doesn't mirror, can never silently produce a wrong baseline number.
 
-Size: the free CPLEX edition allows 1000 variables/constraints, i.e. roughly 10-12 flights with
-3 planes; larger schedules need a full CPLEX license.
+Size: the free CPLEX edition allows 1000 variables/constraints (~20 flights x 3 planes). Proving
+optimality is the harder limit: ~10 flights take about a second, but 20 flights x 3 planes can
+run for many minutes without closing the gap. By default (CPLEX_CONFIG["require_optimal"]) only
+proven-optimal plans are accepted; set it to False to accept CPLEX's best plan within
+CPLEX_CONFIG["time_limit_s"], reported as "CPLEX (best found)".
 """
 
 import copy
@@ -39,6 +42,7 @@ from docplex.mp.model import Model
 from docplex.mp.utils import DOcplexException, DOcplexLimitsExceeded
 
 from src.baselines import BaselineSolverError
+from src.config import CPLEX_CONFIG
 from src.utils.envs import (
     DEFAULT_DIST_KM,
     DELAY_PENALTY_CAP,
@@ -51,12 +55,19 @@ from src.utils.envs import (
 
 STEP_COST_CAP = -REWARD_FLOOR  # the env's per-flight reward floor, as a cap on per-flight cost
 
+# CPLEX MIP status codes (cplex._internal._constants).
+_PROVEN_OPTIMAL = {101, 102}  # CPXMIP_OPTIMAL, CPXMIP_OPTIMAL_TOL (within the 1e-9 mip gap)
+_ABORTED_BY_USER = {113, 114}  # CPXMIP_ABORT_FEAS / _INFEAS: e.g. Ctrl+C during the solve
+
 
 @dataclass
 class CplexPlan:
     planes: list[str]  # planes[i] is the plane assigned to flights[i]
     starts_from_home: list[bool]  # True where flights[i] is its plane's first flight
     objective: float  # minimized total cost, i.e. -(predicted total env reward)
+    proven_optimal: bool  # False only if accepted with require_optimal=False
+    gap: float  # CPLEX's relative optimality gap (0 when proven optimal)
+    solve_seconds: float
 
     @property
     def predicted_reward(self) -> float:
@@ -74,14 +85,24 @@ def solve_assignment(
     dist_dict: dict,
     penalty_per_min: float,
     use_clipping: bool,
+    time_limit_s: float | None = None,
+    require_optimal: bool | None = None,
 ) -> CplexPlan:
     """Optimal plane-per-flight assignment for AirlineEnv's reward (see module docstring).
 
-    Raises BaselineSolverError: retryable for schedule-specific failures, not retryable when the
-    model exceeds the CPLEX edition's size limits.
+    time_limit_s / require_optimal default to CPLEX_CONFIG. With require_optimal, a plan CPLEX
+    has not proven optimal (e.g. it hit the time limit) is rejected, so a "CPLEX (optimal)" number
+    is never just CPLEX's best guess.
+
+    Raises BaselineSolverError: retryable for schedule-specific failures (no solution, no proof of
+    optimality within the time limit), not retryable when the model exceeds the CPLEX edition's
+    size limits. Raises KeyboardInterrupt if the solve was interrupted (e.g. Ctrl+C), so an
+    interrupt stops the run instead of its partial result being used.
     """
+    time_limit_s = CPLEX_CONFIG["time_limit_s"] if time_limit_s is None else time_limit_s
+    require_optimal = CPLEX_CONFIG["require_optimal"] if require_optimal is None else require_optimal
     try:
-        return _solve(flights, plane_configs, dist_dict, penalty_per_min, use_clipping)
+        return _solve(flights, plane_configs, dist_dict, penalty_per_min, use_clipping, time_limit_s, require_optimal)
     except DOcplexLimitsExceeded as e:
         raise BaselineSolverError(
             f"schedule too large for this CPLEX edition ({e}); use fewer flights/planes or a full CPLEX license",
@@ -91,7 +112,7 @@ def solve_assignment(
         raise BaselineSolverError(f"CPLEX error: {e}") from e
 
 
-def _solve(flights, plane_configs, dist_dict, penalty_per_min, use_clipping) -> CplexPlan:
+def _solve(flights, plane_configs, dist_dict, penalty_per_min, use_clipping, time_limit_s, require_optimal):
     n = len(flights)
     planes = list(plane_configs)
 
@@ -114,6 +135,7 @@ def _solve(flights, plane_configs, dist_dict, penalty_per_min, use_clipping) -> 
 
     m = Model(name="aircraft_assignment_env_twin")
     m.parameters.mip.tolerances.mipgap = 1e-9
+    m.parameters.timelimit = time_limit_s
 
     x = m.binary_var_dict([(p, i) for p in planes for i in range(n)], name="x")
     z = m.binary_var_dict([(p, i) for p in planes for i in range(n)], name="z")
@@ -177,14 +199,26 @@ def _solve(flights, plane_configs, dist_dict, penalty_per_min, use_clipping) -> 
 
     m.minimize(m.sum(objective))
     solution = m.solve()
+    details = m.solve_details
+    if details.status_code in _ABORTED_BY_USER:
+        raise KeyboardInterrupt(f"CPLEX solve interrupted ({details.status})")
     if not solution:
-        raise BaselineSolverError(f"CPLEX returned no solution (status: {m.solve_details.status})")
+        raise BaselineSolverError(f"CPLEX returned no solution ({details.status}, {details.time:.0f}s)")
+    proven = details.status_code in _PROVEN_OPTIMAL
+    if require_optimal and not proven:
+        raise BaselineSolverError(
+            f"CPLEX did not prove optimality ({details.status} after {details.time:.0f}s; best plan found "
+            f"{-solution.objective_value:,.0f}, gap to bound {details.mip_relative_gap:.0%})"
+        )
 
     assigned = [next(p for p in planes if solution.get_value(x[p, i]) > 0.5) for i in range(n)]
     return CplexPlan(
         planes=assigned,
         starts_from_home=[solution.get_value(z[assigned[i], i]) > 0.5 for i in range(n)],
         objective=float(solution.objective_value),
+        proven_optimal=proven,
+        gap=0.0 if proven else float(details.mip_relative_gap),
+        solve_seconds=float(details.time),
     )
 
 

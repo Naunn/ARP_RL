@@ -64,13 +64,13 @@ INSTANCE_NAME = "A01_6088570"
 #   "random" -- MAX_FLIGHTS synthetic flights between N_CITIES of the instance's airports
 #   "trap"   -- like "random", plus an early hub-to-hub rush and a late concurrency bottleneck
 SCHEDULE_TYPE = "sample"
-N_CITIES = 4  # "random"/"trap" only: how many of the instance's airports the flights use (trap needs >= 3)
+N_CITIES = 3  # "random"/"trap" only: how many of the instance's airports the flights use (trap needs >= 3)
 
 # Downsize for a faster dev loop -- set either to None to use the full instance's count instead.
 # Start small, then raise these (and/or switch to a B_* instance above) once training speed at the
 # current size is no longer the bottleneck.
-MAX_FLIGHTS = 25
-MAX_PLANES = 5
+MAX_FLIGHTS = 20
+MAX_PLANES = 3
 
 ALGO = "DOUBLE_DQN"  # "DQN" or "DOUBLE_DQN"
 VARIANT = "idle"  # base overrides from AGENT_VARIANT_OVERRIDES: "full" / "no_bias" / "idle"
@@ -80,7 +80,7 @@ N_EPISODES = 1000  # how long to train for; MODEL_TRAINING_PARAMS[ALGO]["n_episo
 # for quick tweaks without touching config.py. Leave empty to just use the variant as-is.
 # Also evaluate the optimal CPLEX baseline (src/baselines/cplex_solver.py) as a reference. Needs
 # `uv sync --extra cplex`; the free CPLEX edition only handles ~10-12 flights with 3 planes.
-INCLUDE_CPLEX = False
+INCLUDE_CPLEX = True
 
 CUSTOM_OVERRIDES = {
     # "hidden_dim": 512,
@@ -129,7 +129,12 @@ def main() -> None:
     # attempt's seed) before any training happens on it.
     flights, planes, airports, dist_dict = build_schedule_with_retries(
         lambda attempt: build_schedule(
-            base, SCHEDULE_TYPE, MAX_FLIGHTS, MAX_PLANES, N_CITIES, seed=seed + attempt * RETRY_SEED_STRIDE
+            base,
+            SCHEDULE_TYPE,
+            MAX_FLIGHTS,
+            MAX_PLANES,
+            N_CITIES,
+            seed=seed + attempt * RETRY_SEED_STRIDE,
         ),
         penalty,
         INCLUDE_CPLEX,
