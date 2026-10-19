@@ -39,9 +39,9 @@ C_N = 4  # 3 for testing random + trap (100 iter); for sampled does not matter
 P_N = 4  # 2 for testing random + trap (100 iter); round(aircraft_df.shape[0]/3) for sampled - too long for 100 iter :(
 TRAP = False
 
-# Also evaluate the optimal CPLEX baseline (src/baselines/cplex_solver.py) as a reference. Needs
-# `uv sync --extra cplex`; the free CPLEX edition only handles ~10-12 flights with 3 planes.
-INCLUDE_CPLEX = False
+# Also evaluate the optimal baseline (src/baselines/; solver chosen in config.BASELINE_SOLVER_CONFIG) as a
+# reference. Proven optima are practical up to ~10-12 flights with 3 planes.
+INCLUDE_OPTIMAL_BASELINE = False
 
 
 def main() -> None:
@@ -55,7 +55,7 @@ def main() -> None:
             "n_cities": C_N,
             "n_planes": P_N,
             "trap": TRAP,
-            "include_cplex": INCLUDE_CPLEX,
+            "include_optimal_baseline": INCLUDE_OPTIMAL_BASELINE,
             "n_iterations": N_ITERATIONS,
         },
         seed,
@@ -106,10 +106,10 @@ def main() -> None:
             dist_dict = create_dist_dict_from_airports(airports_list=airports)
             return flights, planes, airports, dist_dict
 
-        # If the CPLEX baseline is included and fails on an instance, a new one is sampled for the
+        # If the optimal baseline is included and fails on an instance, a new one is sampled for the
         # same iteration before any training happens on it.
         flights, planes, airports, dist_dict = build_schedule_with_retries(
-            build_instance, penalty, INCLUDE_CPLEX, label=f"iteration {i + 1}"
+            build_instance, penalty, INCLUDE_OPTIMAL_BASELINE, label=f"iteration {i + 1}"
         )
 
         dummy_env = AirlineEnv(
@@ -135,7 +135,7 @@ def main() -> None:
             airports,
             penalty,
             f"iteration {i + 1}/{N_ITERATIONS}",
-            include_cplex=INCLUDE_CPLEX,
+            include_optimal=INCLUDE_OPTIMAL_BASELINE,
         )
         iter_viz[f"{i}"] = (training_scores, eval_results)
 

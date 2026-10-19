@@ -14,9 +14,10 @@ import torch
 
 from src.agents.dqn_agent import DoubleDQNAgent, DQNAgent
 from src.baselines import BaselineSolverError
+from src.baselines.optimal import OptimalBaselineSolver, plan_schedule, solver_display_name
 from src.config import (
     AGENT_VARIANT_OVERRIDES,
-    CPLEX_CONFIG,
+    BASELINE_SOLVER_CONFIG,
     DISRUPTION_ACTIONS_CONFIG,
     MODEL_HYPERPARAMS,
     MODEL_TRAINING_PARAMS,
@@ -132,26 +133,26 @@ def print_results_table(results: Dict[str, Tuple[float, float]], name: str) -> N
     logger.info("\n".join(rows))
 
 
-# Only proven-optimal plans are accepted unless CPLEX_CONFIG["require_optimal"] is False.
-CPLEX_LABEL = "CPLEX (optimal)" if CPLEX_CONFIG["require_optimal"] else "CPLEX (best found)"
+def optimal_baseline_label() -> str:
+    """e.g. "Gurobi (optimal)"; "(best found)" when BASELINE_SOLVER_CONFIG["require_optimal"] is False."""
+    proof = "optimal" if BASELINE_SOLVER_CONFIG["require_optimal"] else "best found"
+    return f"{solver_display_name()} ({proof})"
 
 
-def baseline_solvers(include_cplex: bool = False) -> Dict[str, Any]:
-    """Random and Greedy baselines, plus the optimal CPLEX baseline if include_cplex."""
+def baseline_solvers(include_optimal: bool = False) -> Dict[str, Any]:
+    """Random and Greedy baselines, plus the optimal baseline (BASELINE_SOLVER_CONFIG) if include_optimal."""
     solvers: Dict[str, Any] = {
         "Random Baseline": RandomSolver(),
         "Greedy Baseline": ClosestPlaneGreedySolver(),
     }
-    if include_cplex:
-        from src.baselines.cplex_solver import CplexSolver  # optional dependency: `uv sync --extra cplex`
-
-        solvers[CPLEX_LABEL] = CplexSolver()
+    if include_optimal:
+        solvers[optimal_baseline_label()] = OptimalBaselineSolver()
     return solvers
 
 
-def build_solvers(agents: AgentTable, include_cplex: bool = False) -> Dict[str, Any]:
+def build_solvers(agents: AgentTable, include_optimal: bool = False) -> Dict[str, Any]:
     """Baselines plus one DQNSolver per (variant, algo) agent currently built."""
-    solvers = baseline_solvers(include_cplex)
+    solvers = baseline_solvers(include_optimal)
     for variant, by_algo in agents.items():
         for algo, agent in by_algo.items():
             solvers[variant_label(variant, algo)] = DQNSolver(agent)
@@ -165,7 +166,7 @@ def make_eval_env(
     airports: List[str],
     penalty_per_min: int,
 ) -> AirlineEnv:
-    """The environment every method is evaluated (and the CPLEX baseline solved) in."""
+    """The environment every method is evaluated (and the optimal baseline solved) in."""
     return AirlineEnv(
         flights, planes, dist_dict, airports, penalty_per_min, use_clipping=REWARD_CONFIG["final_eval_use_clipping"]
     )
@@ -181,23 +182,22 @@ RETRY_SEED_STRIDE = 1_000_003
 def build_schedule_with_retries(
     build: Callable[[int], Schedule],
     penalty_per_min: int,
-    include_cplex: bool,
+    include_optimal: bool,
     label: str,
     max_attempts: int = MAX_SCHEDULE_ATTEMPTS,
 ) -> Schedule:
-    """Builds a schedule with build(attempt) and, if include_cplex, solves the CPLEX baseline on it
-    right away (the plan is cached for the later evaluation). If the solver fails on that schedule,
-    `build` is called again with the next attempt number for a fresh schedule, so the experiment's
-    current iteration is retried rather than lost -- and before any training time is spent on it.
-    Non-retryable failures (e.g. the CPLEX edition's size limit) are raised immediately.
+    """Builds a schedule with build(attempt) and, if include_optimal, solves the optimal baseline on
+    it right away (the plan is cached for the later evaluation). If the solver fails on that
+    schedule, `build` is called again with the next attempt number for a fresh schedule, so the
+    experiment's current iteration is retried rather than lost -- and before any training time is
+    spent on it. Non-retryable failures (e.g. a license size limit) are raised immediately.
     """
+    solver_name = solver_display_name()
     last_error: BaselineSolverError | None = None
     for attempt in range(max_attempts):
         schedule = build(attempt)
-        if not include_cplex:
+        if not include_optimal:
             return schedule
-        from src.baselines.cplex_solver import plan_schedule  # optional dependency: `uv sync --extra cplex`
-
         flights, planes, airports, dist_dict = schedule
         try:
             plan = plan_schedule(make_eval_env(flights, planes, dist_dict, airports, penalty_per_min))
@@ -206,17 +206,20 @@ def build_schedule_with_retries(
                 raise
             last_error = e
             logger.warning(
-                f"{label}: CPLEX baseline failed on schedule attempt {attempt + 1}/{max_attempts} ({e}); "
+                f"{label}: {solver_name} baseline failed on schedule attempt {attempt + 1}/{max_attempts} ({e}); "
                 "drawing a new schedule for the same iteration"
             )
             continue
         outcome = "proven optimal" if plan.proven_optimal else f"best found, not proven (gap {plan.gap:.0%})"
-        logger.info(f"CPLEX baseline: {outcome} in {plan.solve_seconds:.1f}s, reward {plan.predicted_reward:,.0f}")
+        logger.info(
+            f"{solver_name} baseline: {outcome} in {plan.solve_seconds:.1f}s, reward {plan.predicted_reward:,.0f}"
+        )
         return schedule
     raise BaselineSolverError(
-        f"{label}: CPLEX baseline failed on {max_attempts} schedules in a row (last: {last_error}). If CPLEX keeps "
-        "missing its time limit, the schedules are too large to prove optimal: reduce MAX_FLIGHTS / MAX_PLANES, "
-        'raise CPLEX_CONFIG["time_limit_s"], or set CPLEX_CONFIG["require_optimal"] = False to accept its best plan.',
+        f"{label}: {solver_name} baseline failed on {max_attempts} schedules in a row (last: {last_error}). If it "
+        "keeps missing its time limit, the schedules are too large to prove optimal: reduce MAX_FLIGHTS / MAX_PLANES, "
+        'raise BASELINE_SOLVER_CONFIG["time_limit_s"], or set BASELINE_SOLVER_CONFIG["require_optimal"] = False '
+        "to accept its best plan.",
         retryable=False,
     ) from last_error
 
@@ -230,13 +233,13 @@ def evaluate_models_on_schedule(
     penalty_per_min: int,
     eval_label: str,
     show_schedule: bool = False,
-    include_cplex: bool = False,
+    include_optimal: bool = False,
 ) -> Dict[str, Tuple[float, float]]:
     """Evaluates every current solver (baselines + all built agent variants) on one schedule."""
     eval_env = make_eval_env(schedule_flights, planes, dist_dict, airports, penalty_per_min)
     results = {
         name: evaluate_agent_performance(eval_env, solver, name, show_schedule)
-        for name, solver in build_solvers(agents, include_cplex).items()
+        for name, solver in build_solvers(agents, include_optimal).items()
     }
     print_results_table(results, eval_label)
     return results

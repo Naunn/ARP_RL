@@ -90,13 +90,15 @@ EARLY_STOPPING_CONFIG: Dict[str, Any] = {
 # Every experiment run writes its config, log, results, and checkpoints to RUNS_DIR/<run_id>/.
 RUNS_DIR: str = "runs"
 
-# CPLEX baseline (src/baselines/cplex_solver.py), used when an experiment sets INCLUDE_CPLEX.
-CPLEX_CONFIG: Dict[str, Any] = {
+# Optimal baseline (src/baselines/), used when an experiment sets INCLUDE_OPTIMAL_BASELINE.
+BASELINE_SOLVER_CONFIG: Dict[str, Any] = {
+    # "gurobi" (`uv sync --extra gurobi` + a Gurobi license) or "cplex" (`uv sync --extra cplex`).
+    "solver": "gurobi",
     # Max seconds per schedule. Small schedules (~10 flights) are proven optimal in about a second;
     # ~20 flights x 3 planes can need far longer than any reasonable limit.
     "time_limit_s": 180,
-    # True: only a plan CPLEX has PROVEN optimal is accepted (reported as "CPLEX (optimal)");
+    # True: only a plan the solver has PROVEN optimal is accepted (reported as "<Solver> (optimal)");
     # otherwise the schedule counts as a solver failure and the experiment retries with a new one.
-    # False: CPLEX's best plan within the time limit is accepted (reported as "CPLEX (best found)").
+    # False: the solver's best plan within the time limit is accepted ("<Solver> (best found)").
     "require_optimal": True,
 }

@@ -9,11 +9,13 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 
-def build_flight_pool(flights_df: pd.DataFrame, itineraries_df: pd.DataFrame):
+def build_flight_pool(flights_df: pd.DataFrame, itineraries_df: pd.DataFrame, empty_flights: bool = True):
     merged = flights_df.merge(itineraries_df, on="flight_id", how="left")
     merged["total_ticket_price"] = merged["total_ticket_price"].fillna(0.0)
     merged["total_passenger_count"] = merged["total_passenger_count"].fillna(0)
-    merged = merged[merged.total_ticket_price > 0]
+
+    if not empty_flights:
+        merged = merged[merged.total_ticket_price > 0]
 
     pool = []
     for row in merged.to_dict("records"):

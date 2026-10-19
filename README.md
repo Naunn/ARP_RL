@@ -14,7 +14,7 @@ This repository contains:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv
 uv sync                                            # install dependencies
-uv sync --extra cplex                              # optional: optimal CPLEX baseline (src/baselines/)
+uv sync --extra gurobi                             # optional: optimal baseline solver (or --extra cplex)
 uv run python -m src.experiments.single_model_experiment
 ```
 
@@ -53,29 +53,34 @@ Every run writes to `runs/<timestamp>_<name>/` (gitignored):
 
 ## Baselines
 
-Every evaluation compares the agents with a Random and a Greedy baseline. Setting `INCLUDE_CPLEX =
-True` in an experiment script also adds **`CPLEX (optimal)`**: `src/baselines/cplex_solver.py`, an
-exact CPLEX model of `AirlineEnv`'s reward that finds the best possible plane assignment for each
-schedule (needs `uv sync --extra cplex`; the free CPLEX edition handles ~10-12 flights with 3
-planes).
+Every evaluation compares the agents with a Random and a Greedy baseline. Setting
+`INCLUDE_OPTIMAL_BASELINE = True` in an experiment script also adds the **optimal baseline**
+(`src/baselines/`): an exact model of `AirlineEnv`'s reward that finds the best possible plane
+assignment for each schedule, reported as e.g. `Gurobi (optimal)`.
 
-- Only plans CPLEX has *proven* optimal are used (within `CPLEX_CONFIG["time_limit_s"]`, in
-  `src/config.py`). Proving optimality gets hard fast: ~10 flights take about a second, 20 flights x
-  3 planes may not finish in minutes. Set `CPLEX_CONFIG["require_optimal"] = False` to use CPLEX's
-  best plan within the time limit instead, reported as `CPLEX (best found)` -- an upper reference,
-  not a guaranteed optimum, so a trained agent can legitimately beat it.
-- Every plan CPLEX produces is replayed through the real environment; if the reward differs from
-  what CPLEX predicted, it's treated as a solver failure rather than used.
-- If CPLEX fails on a schedule, the experiment draws a new schedule for the same iteration (before
-  training on it) instead of crashing; failures retrying can't fix, like the license size limit,
-  stop the run with a clear message.
+- Pick the solver with `BASELINE_SOLVER_CONFIG["solver"]` in `src/config.py`: `"gurobi"`
+  (`uv sync --extra gurobi` + a Gurobi license) or `"cplex"` (`uv sync --extra cplex`). The model
+  is defined once (`optimal.py`); `gurobi_solver.py` and `cplex_solver.py` only translate it.
+- Only plans the solver has *proven* optimal are used (within `BASELINE_SOLVER_CONFIG["time_limit_s"]`).
+  Proving optimality gets hard fast: ~10 flights take about a second, 20 flights x 3 planes may not
+  finish in minutes. Set `BASELINE_SOLVER_CONFIG["require_optimal"] = False` to use the solver's
+  best plan within the time limit instead, reported as `<Solver> (best found)` -- a reference, not a
+  guaranteed optimum, so a trained agent can legitimately beat it.
+- Every plan is replayed through the real environment; if the reward differs from what the solver
+  predicted, it's treated as a solver failure rather than used.
+- If the solver fails on a schedule, the experiment draws a new schedule for the same iteration
+  (before training on it) instead of crashing; failures retrying can't fix, like a license size
+  limit, stop the run with a clear message.
 - To check for yourself that the model is aligned with the environment and truly optimal, run
-  `python -m src.baselines.verify_cplex` (options: `--cases`, `--flights`, `--planes`). It compares
-  CPLEX's predicted reward with the env's reward for its plan, and with the best of *every* possible
-  assignment, enumerated through the env alone.
+  `python -m src.baselines.verify_baseline` (options: `--solver cplex|gurobi|both`, `--cases`,
+  `--flights`, `--planes`, `--skip-brute-force`). It compares each solver's predicted reward with the
+  env's reward for its plan and with the best of *every* possible assignment (enumerated through the
+  env alone); `--solver both` also checks that CPLEX and Gurobi reach the same optimum.
 - Reward constants and the empty-seat formula live at the top of `src/utils/envs.py` and are shared
-  with the CPLEX model; any other change to `AirlineEnv.step()` must be mirrored in
-  `src/baselines/cplex_solver.py` (the replay check and the verifier will flag it if not).
+  with the model; any other change to `AirlineEnv.step()` must be mirrored in
+  `src/baselines/optimal.py` (the replay check and the verifier will flag it if not).
+- `python -m src.workspace.gurobi` / `python -m src.workspace.cplex` print a flight-by-flight
+  comparison of the optimal plan with a Double DQN trained on the same schedule.
 
 ## Analysis
 
@@ -119,8 +124,8 @@ dist_dict inputs `AirlineEnv` expects:
 	- `disruptions.py`: disruption injection
 	- `seeding.py`: `set_seed`
 	- `dist.py`: geodesic airport distances; `data_prep.py`: raw ROADEF table readers
-- `src/baselines/` — the optimal CPLEX baseline and its verifier (see *Baselines*)
-- `src/workspace/cplex.py` — per-flight CPLEX vs. Double DQN comparison script
+- `src/baselines/` — the optimal baseline (Gurobi or CPLEX) and its verifier (see *Baselines*)
+- `src/workspace/` — per-flight optimal-vs-Double-DQN comparison (`gurobi.py`, `cplex.py`)
 
 ## Linting and Checks
 

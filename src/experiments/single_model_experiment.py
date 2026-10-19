@@ -78,9 +78,9 @@ N_EPISODES = 1000  # how long to train for; MODEL_TRAINING_PARAMS[ALGO]["n_episo
 
 # One-off agent hyperparameter overrides on top of MODEL_HYPERPARAMS[ALGO] + AGENT_VARIANT_OVERRIDES[VARIANT],
 # for quick tweaks without touching config.py. Leave empty to just use the variant as-is.
-# Also evaluate the optimal CPLEX baseline (src/baselines/cplex_solver.py) as a reference. Needs
-# `uv sync --extra cplex`; the free CPLEX edition only handles ~10-12 flights with 3 planes.
-INCLUDE_CPLEX = True
+# Also evaluate the optimal baseline (src/baselines/; solver chosen in config.BASELINE_SOLVER_CONFIG) as a
+# reference. Proven optima are practical up to ~10-12 flights with 3 planes.
+INCLUDE_OPTIMAL_BASELINE = True
 
 CUSTOM_OVERRIDES = {
     # "hidden_dim": 512,
@@ -109,7 +109,7 @@ def main() -> None:
             "variant": VARIANT,
             "n_episodes": N_EPISODES,
             "custom_overrides": CUSTOM_OVERRIDES,
-            "include_cplex": INCLUDE_CPLEX,
+            "include_optimal_baseline": INCLUDE_OPTIMAL_BASELINE,
             "effective_hyperparams": hyperparams,
         },
         seed,
@@ -125,7 +125,7 @@ def main() -> None:
         f"Instance {INSTANCE_NAME} (full): {len(base[0])} flights, {len(base[1])} aircraft, {len(base[2])} airports"
     )
     penalty = REWARD_CONFIG["penalty_per_min"]
-    # If the CPLEX baseline is included and fails on the schedule, a new one is drawn (next
+    # If the optimal baseline is included and fails on the schedule, a new one is drawn (next
     # attempt's seed) before any training happens on it.
     flights, planes, airports, dist_dict = build_schedule_with_retries(
         lambda attempt: build_schedule(
@@ -137,7 +137,7 @@ def main() -> None:
             seed=seed + attempt * RETRY_SEED_STRIDE,
         ),
         penalty,
-        INCLUDE_CPLEX,
+        INCLUDE_OPTIMAL_BASELINE,
         label="schedule",
     )
     logger.info(
@@ -194,7 +194,7 @@ def main() -> None:
         penalty,
         use_clipping=REWARD_CONFIG["final_eval_use_clipping"],
     )
-    solvers = {**baseline_solvers(INCLUDE_CPLEX), agent_label: DQNSolver(agent)}
+    solvers = {**baseline_solvers(INCLUDE_OPTIMAL_BASELINE), agent_label: DQNSolver(agent)}
     eval_results = {name: evaluate_agent_performance(eval_env, solver, name) for name, solver in solvers.items()}
     print_results_table(eval_results, f"{schedule_label}, after training")
 

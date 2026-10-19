@@ -63,9 +63,9 @@ N_DISRUPTIONS = DEFAULT_N_DISRUPTIONS  # disrupt -> retrain rounds per run
 N_EPISODES = None  # episodes for the initial training; None = MODEL_TRAINING_PARAMS default per algo
 N_RETRAIN_EPISODES = None  # episodes for each retraining on a disruption; None = same as N_EPISODES
 
-# Also evaluate the optimal CPLEX baseline (src/baselines/cplex_solver.py) as a reference. Needs
-# `uv sync --extra cplex`; the free CPLEX edition only handles ~10-12 flights with 3 planes.
-INCLUDE_CPLEX = True
+# Also evaluate the optimal baseline (src/baselines/; solver chosen in config.BASELINE_SOLVER_CONFIG) as a
+# reference. Proven optima are practical up to ~10-12 flights with 3 planes.
+INCLUDE_OPTIMAL_BASELINE = True
 
 # ============================================================================
 
@@ -86,7 +86,7 @@ def main() -> None:
             "n_disruptions": N_DISRUPTIONS,
             "n_episodes": N_EPISODES,
             "n_retrain_episodes": N_RETRAIN_EPISODES,
-            "include_cplex": INCLUDE_CPLEX,
+            "include_optimal_baseline": INCLUDE_OPTIMAL_BASELINE,
         },
         seed,
     )
@@ -101,7 +101,7 @@ def main() -> None:
     iter_viz: Dict[str, Any] = {}
     for i in range(N_RUNS):
         log_section(f"RUN {i + 1}/{N_RUNS}")
-        # If the CPLEX baseline is included and fails on a schedule, a new one is drawn for the
+        # If the optimal baseline is included and fails on a schedule, a new one is drawn for the
         # same run (next attempt's seed) before any training happens on it.
         flights, planes, airports, dist_dict = build_schedule_with_retries(
             lambda attempt: build_schedule(
@@ -113,7 +113,7 @@ def main() -> None:
                 seed=seed + i + attempt * RETRY_SEED_STRIDE,
             ),
             penalty,
-            INCLUDE_CPLEX,
+            INCLUDE_OPTIMAL_BASELINE,
             label=f"run {i + 1}, initial schedule",
         )
         logger.info(
@@ -142,7 +142,7 @@ def main() -> None:
                 airports,
                 penalty,
                 label,
-                include_cplex=INCLUDE_CPLEX,
+                include_optimal=INCLUDE_OPTIMAL_BASELINE,
             )
 
         def train(schedule: List[Dict[str, Any]], phase_name: str, n_episodes: int | None) -> None:
@@ -175,7 +175,7 @@ def main() -> None:
         )
         for d in range(1, N_DISRUPTIONS + 1):
             log_subsection(f"Disruption {d}/{N_DISRUPTIONS}: generated from the initial schedule")
-            # A disruption the CPLEX baseline fails on is replaced by a newly generated one.
+            # A disruption the optimal baseline fails on is replaced by a newly generated one.
             disrupted, _, _, _ = build_schedule_with_retries(
                 lambda _attempt: (
                     cast(
@@ -187,7 +187,7 @@ def main() -> None:
                     dist_dict,
                 ),
                 penalty,
-                INCLUDE_CPLEX,
+                INCLUDE_OPTIMAL_BASELINE,
                 label=f"run {i + 1}, disruption {d}",
             )
             pre_retrain_eval = evaluate(disrupted, f"disruption {d}, before retraining")
