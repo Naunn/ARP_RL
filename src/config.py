@@ -1,141 +1,104 @@
-CITIES = [
-    "praga",
-    "milan",
-    "lodz",
-    "paris",  # Added for more complexity
-    "madryt",
-    "berlin",
-    "london",
-    "barcelona",
-    "qatar",
-    "dubai",
-]
+"""Central application configurations for reinforcement learning airline schedules."""
 
-AIRPORTS = [
-    # "praga",
-    # "milan",
-    "lodz",
-    # "paris",
-    # "madryt",
-    "berlin",
-    # "london",
-    "barcelona",
-    # "qatar",
-    "dubai",
-]
-N_FLIGHTS = 10
-N_EVAL_FLIGHTS = N_FLIGHTS * 5
-FIRST_FLIGHT_HOUR = 5
-LAST_FLIGHT_HOUR = 23
-MIN_PASS = 100
-MAX_PASS = 180
+from typing import Any, Dict
 
-PLANES_TEMPLATES = {
-    "BOEING": {
-        "fuel_use": 900.0,
-        "seats": 150,
-        "speed": 900,
-        "base_fare": 50,
-        "rate_per_km": 0.15,
-    },
-    "AIRBUS": {
-        "fuel_use": 850.0,
-        "seats": 120,
-        "speed": 850,
-        "base_fare": 120,
-        "rate_per_km": 0.28,
-    },
-}
+# Default RNG seed for every experiment (each script can override it with its own SEED knob).
+# An int makes reruns reproduce the same schedules/results; None draws a fresh seed every run
+# (genuinely new schedules) -- the seed used is still recorded in the run's config.json.
+SEED: int | None = None
 
-# --- TRAINING / EXPERIMENT CONFIG ---
-# Iteration control and model-specific training hyperparameters
-N_ITERATIONS = 1
+N_ITERATIONS: int = 3
 
-MODEL_HYPERPARAMS = {
+# --- STRUCTURAL CONFIGURATIONS ---
+MODEL_HYPERPARAMS: Dict[str, Dict[str, float]] = {
     "DQN": {
-        "lr": 0.0001,
-        "gamma": 0.95,
-        "epsilon_decay": 0.999,
-        "init_epsilon": 0.5,
+        "lr": 0.0005,
+        "gamma": 0.99,
+        "epsilon_decay": 0.9995,
+        "init_epsilon": 0.8,
         "min_epsilon": 0.1,
-        "batch_size": 64,
-        "tau": 0.005,
+        "batch_size": 256,
+        "tau": 0.001,
+        "use_attention": True,
+        "use_expert_bias": True,
+        "expert_bias_weight": 0.05,
+        "use_action_masking": False,
     },
     "DOUBLE_DQN": {
-        "lr": 0.000075,
-        "gamma": 0.95,
-        "epsilon_decay": 0.999,
-        "init_epsilon": 0.5,
+        "lr": 0.0005,
+        "gamma": 0.99,
+        "epsilon_decay": 0.9995,
+        "init_epsilon": 0.8,
         "min_epsilon": 0.1,
-        "batch_size": 64,
-        "tau": 0.005,
-    },
-    "Q_LEARNING": {
-        "lr": 0.1,
-        "gamma": 0.9,
-        "epsilon": 1.0,
-        "epsilon_decay": 0.999995,
-        "min_epsilon": 0.01,
-        "use_decay": True,
+        "batch_size": 256,
+        "tau": 0.001,
+        "use_attention": True,
+        "use_expert_bias": True,
+        "expert_bias_weight": 0.05,
+        "use_action_masking": False,
     },
 }
 
-MODEL_TRAINING_PARAMS = {
-    "DQN": {"n_episodes": 10_000, "log_interval": 200},
-    "DOUBLE_DQN": {"n_episodes": 10_000, "log_interval": 200},
-    "Q_LEARNING": {"n_episodes": 1_000_000, "log_interval": 2_000},
+MODEL_TRAINING_PARAMS: Dict[str, Dict[str, int]] = {
+    "DQN": {"n_episodes": 500, "log_interval": 10},
+    "DOUBLE_DQN": {"n_episodes": 500, "log_interval": 10},
 }
 
-# Training stability controls for value-based agents.
-RL_TRAINING_CONFIG = {
+# Ablation variants compared across experiments: each maps to hyperparameter overrides applied
+# on top of MODEL_HYPERPARAMS[algo]. "full" is the base config (no overrides). Order here is the
+# order variants are trained/displayed in.
+AGENT_VARIANT_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    "full": {},
+    "no_bias": {
+        "use_expert_bias": False,
+        "use_action_masking": False,
+    },
+    "idle": {
+        "use_attention": False,
+        "use_expert_bias": False,
+        "use_action_masking": False,
+    },
+}
+
+# Severity parameters for the synthetic disruptions injected during disruption-recovery training.
+DISRUPTION_ACTIONS_CONFIG: Dict[str, Any] = {
+    "delay_count_fraction": 1 / 3,  # fraction of flights delayed, e.g. N // 3
+    "delay_min_minutes": 60,
+    "delay_max_minutes": 180,
+    "replace_airport_field": "origin",
+    "replace_airport_method": "closest",
+}
+
+RL_TRAINING_CONFIG: Dict[str, float] = {
     "dqn_reward_scale": 0.001,
 }
 
-# Reward-shaping controls. Keeping clipping enabled prevents delay penalties from
-# dominating training and evaluation when schedules become highly congested.
-REWARD_CONFIG = {
+REWARD_CONFIG: Dict[str, Any] = {
     "train_use_clipping": True,
     "eval_use_clipping": True,
     "final_eval_use_clipping": True,
-    "penalty_per_min": 5,
+    "penalty_per_min": 150,
 }
 
-# Legacy aliases for compatibility with existing training code
-DQN_HYPERPARAMS = MODEL_HYPERPARAMS["DQN"]
-DOUBLE_DQN_HYPERPARAMS = MODEL_HYPERPARAMS["DOUBLE_DQN"]
-Q_LEARNING_PARAMS = MODEL_HYPERPARAMS["Q_LEARNING"]
-
-# Legacy training parameter aliases
-N_DQN_EPISODES = MODEL_TRAINING_PARAMS["DQN"]["n_episodes"]
-N_DOUBLE_DQN_EPISODES = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["n_episodes"]
-N_Q_EPISODES = MODEL_TRAINING_PARAMS["Q_LEARNING"]["n_episodes"]
-DQN_LOG_INTERVAL = MODEL_TRAINING_PARAMS["DQN"]["log_interval"]
-DOUBLE_DQN_LOG_INTERVAL = MODEL_TRAINING_PARAMS["DOUBLE_DQN"]["log_interval"]
-Q_LOG_INTERVAL = MODEL_TRAINING_PARAMS["Q_LEARNING"]["log_interval"]
-
-# Legacy RL tuning aliases
-DQN_REWARD_SCALE = RL_TRAINING_CONFIG["dqn_reward_scale"]
-
-# Legacy reward aliases
-TRAIN_USE_CLIPPING = REWARD_CONFIG["train_use_clipping"]
-EVAL_USE_CLIPPING = REWARD_CONFIG["eval_use_clipping"]
-FINAL_EVAL_USE_CLIPPING = REWARD_CONFIG["final_eval_use_clipping"]
-PENALTY_PER_MIN = REWARD_CONFIG["penalty_per_min"]
-
-# Legacy epsilon aliases
-INIT_EPSILON = DQN_HYPERPARAMS["init_epsilon"]
-MIN_EPSILON_TARGET = DQN_HYPERPARAMS["min_epsilon"]
-
-# Early stopping defaults
-EARLY_STOPPING_CONFIG = {
-    "patience": 3000,
-    "rolling_window_size": 300,
-    "improvement_threshold": 3000,
-    "min_epsilon_to_stop": 0.12,
+EARLY_STOPPING_CONFIG: Dict[str, Any] = {
+    "patience": 10000,
+    "rolling_window_size": 500,
+    "improvement_threshold": 100.0,
+    "min_epsilon_to_stop": 0.02,
 }
 
-# Checkpoint directory
-CHECKPOINT_DIR = "checkpoints"
+# Every experiment run writes its config, log, results, and checkpoints to RUNS_DIR/<run_id>/.
+RUNS_DIR: str = "runs"
 
-# Default fleet configuration used by training utilities
-FLEET_CONFIG = {"BOEING": 2, "AIRBUS": 2}
+# Optimal baseline (src/baselines/), used when an experiment sets INCLUDE_OPTIMAL_BASELINE.
+BASELINE_SOLVER_CONFIG: Dict[str, Any] = {
+    # "gurobi" (`uv sync --extra gurobi` + a Gurobi license) or "cplex" (`uv sync --extra cplex`).
+    "solver": "gurobi",
+    # Max seconds per schedule. Small schedules (~10 flights) are proven optimal in about a second;
+    # ~20 flights x 3 planes can need far longer than any reasonable limit.
+    "time_limit_s": 180,
+    # True: only a plan the solver has PROVEN optimal is accepted (reported as "<Solver> (optimal)");
+    # otherwise the schedule counts as a solver failure and the experiment retries with a new one.
+    # False: the solver's best plan within the time limit is accepted ("<Solver> (best found)").
+    "require_optimal": True,
+}

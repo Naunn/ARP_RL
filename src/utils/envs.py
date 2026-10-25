@@ -1,10 +1,28 @@
+"""High-performance Reinforcement Learning flight scheduling platform and baseline solvers."""
+
 import random
+from typing import Any
 
 import numpy as np
 
-from src.log_config import get_logger
+from src.utils.logging import log_subsection, logger
 
-logger = get_logger("plane_assignment")
+# Reward-function constants. The exact CPLEX model (src/workspace/cplex.py) imports these, so any
+# change here is automatically reflected there.
+DEFAULT_DIST_KM = 500.0  # distance assumed for airport pairs missing from dist_dict
+RELOCATION_PENALTY_PER_KM = 0.05
+DELAY_PENALTY_CAP = 20000.0  # per-flight delay penalty cap when use_clipping
+REWARD_FLOOR = -30000.0  # per-flight reward floor when use_clipping
+
+
+def capacity_slack_penalty(flight: dict, seats: float) -> float:
+    """Revenue lost to empty seats: average fare per passenger * number of empty seats."""
+    # previous version: 500.0 * max(0.0, seats - pass) / max(1.0, pass)
+    return (
+        (flight.get("total_ticket_price", 0.0) / flight.get("pass", 1))  # average ticket price per passenger
+        * max(0.0, float(seats) - float(flight.get("pass", 1)))  # number of empty seats
+        # * 100  # additional penalty factor for empty seats
+    )
 
 
 class AirlineEnv:
@@ -14,339 +32,346 @@ class AirlineEnv:
         plane_configs,
         dist_dict,
         cities,
-        fuel_price=3,
         penalty_per_min=5,
         use_clipping=True,
+        flight_window_size=16,
     ):
         self.flights = flights
         self.plane_configs = plane_configs
         self.planes = list(plane_configs.keys())
         self.dist_dict = dist_dict
-        self.fuel_price = fuel_price
         self.penalty_per_min = penalty_per_min
         self.use_clipping = use_clipping
+        self.flight_window_size = max(1, int(flight_window_size))
+        take_offs = [p["start"] for p in self.flights]
+        self.operation_time = max(take_offs) - min(take_offs)
 
-        # Normalization
-        start_times = [f["start"] for f in self.flights]
-        self.operation_time = 1440.0
-        self.min_start = min(start_times) if start_times else 0.0
-
+        # Pre-calculate invariant data extensions to avoid loop costs
         planes_seats = [config["seats"] for config in self.plane_configs.values()]
-        self.avg_pass = sum(planes_seats) / len(planes_seats)
+        self.avg_pass = sum(planes_seats) / len(planes_seats) if planes_seats else 1.0
 
         self.max_speed = max(config["speed"] for config in self.plane_configs.values())
         self.max_seats = max(config["seats"] for config in self.plane_configs.values())
-        self.max_fuel_use = max(
-            config["fuel_use"] for config in self.plane_configs.values()
-        )
-        self.max_base_fare = max(
-            config["base_fare"] for config in self.plane_configs.values()
-        )
-        self.max_rate_per_km = max(
-            config["rate_per_km"] for config in self.plane_configs.values()
-        )
+        self.max_hourly_cost = max(config.get("hourly_cost", 0.0) for config in self.plane_configs.values())
+        self.max_fixed_cost = max(config.get("fixed_cost", 0.0) for config in self.plane_configs.values())
         self.max_reloc_dist = max(dist_dict.values()) if dist_dict else 1.0
 
-        # Build stable indexing for strings -> neural arrays
-        self.cities = sorted(list(set(cities + ["lodz"])))
+        plane_starts = [cfg["initial_airport"] for cfg in self.plane_configs.values()]
+        self.cities = sorted(set(cities) | set(plane_starts))
         self.city_to_idx = {city: i for i, city in enumerate(self.cities)}
+        self.num_cities = len(self.cities)
+
+        # Pre-build structural identity mapping matrices for ultra-fast one-hot vector lookups
+        self.city_one_hot_eye = np.eye(self.num_cities, dtype=np.float32)  # identity matrix
+
+        # Dense copy of dist_dict for vectorized per-plane lookups. Missing pairs (and cities absent
+        # from both the instance and dist_dict, mapped to the extra last slot) keep the
+        # DEFAULT_DIST_KM that dist_dict.get(..., DEFAULT_DIST_KM) uses elsewhere in this class.
+        dist_cities = sorted(set(self.cities) | {a for a, _ in dist_dict} | {b for _, b in dist_dict})
+        self._dist_idx = {city: i for i, city in enumerate(dist_cities)}
+        self._unknown_city_idx = len(dist_cities)
+        self._dist_matrix = np.full((len(dist_cities) + 1, len(dist_cities) + 1), DEFAULT_DIST_KM)
+        for (origin, dest), dist in dist_dict.items():
+            self._dist_matrix[self._dist_idx[origin], self._dist_idx[dest]] = dist
+
+        self.plane_seats = np.array([float(self.plane_configs[p]["seats"]) for p in self.planes])
+        self._plane_speed_per_min = np.array([self.plane_configs[p]["speed"] / 60 for p in self.planes])
 
         self.reset()
 
-    def reset(self):
+    def reset(self) -> tuple[tuple[float, ...], tuple[str, ...], int]:
         self.current_f_idx = 0
         self.times = tuple([0.0] * len(self.planes))
-        self.locs = tuple(["lodz"] * len(self.planes))
+        self.locs = tuple([self.plane_configs[p]["initial_airport"] for p in self.planes])
+        self.used_planes = tuple([False] * len(self.planes))
         return (self.times, self.locs, self.current_f_idx)
 
-    def reset_with_schedule(self, new_flights):
-        """Swaps the flight list and resets the state."""
+    def relocation_estimates(self, times, locs, flight) -> tuple[np.ndarray, np.ndarray]:
+        """Per-plane relocation distance to `flight`'s origin and earliest feasible start time."""
+        loc_idx = np.fromiter(
+            (self._dist_idx.get(loc, self._unknown_city_idx) for loc in locs),
+            dtype=np.int64,
+            count=len(locs),
+        )
+        origin_idx = self._dist_idx.get(flight["origin"], self._unknown_city_idx)
+        reloc_dist = self._dist_matrix[loc_idx, origin_idx]
+        actual_start = np.maximum(
+            flight["start"],
+            np.asarray(times, dtype=np.float64) + reloc_dist / self._plane_speed_per_min,
+        )
+        return reloc_dist, actual_start
+
+    def reset_with_schedule(self, new_flights) -> tuple[tuple[float, ...], tuple[str, ...], int]:
+        """Swaps the current operational flight queue mapping layout structures cleanly."""
         self.flights = new_flights
         return self.reset()
 
-    def get_vector_state(self, raw_state=None):
-        """
-        Translates raw simulation elements into separate state representations:
-        1. Fleet State Vector (Fixed tracking context)
-        2. Flight Descriptor Matrix (Sequence length invariant shape)
-        """
-        if raw_state is None:
-            times, locs, f_idx = self.times, self.locs, self.current_f_idx
-        else:
-            times, locs, f_idx = raw_state
+    def get_vector_state(self, raw_state=None) -> tuple[np.ndarray, np.ndarray]:
+        """Translates current raw simulation tracking structures into scalable tensor arrays."""
+        times, locs, f_idx = raw_state if raw_state is not None else (self.times, self.locs, self.current_f_idx)
 
-        num_cities = len(self.cities)
+        # FLEET SYSTEM VECTOR COMPUTATION
+        fleet_list = []
+        active_f = self.flights[f_idx] if 0 <= f_idx < len(self.flights) else None  # check if flight is active
+        active_origin = active_f["origin"] if active_f else None  # get origin of a flight
+        active_start_t = float(active_f["start"]) if active_f else 0.0  # get start time of a flight
 
-        # FLEET CONFIG (Fixed Dimension)
-        fleet_elements = []
+        for idx, (t, loc) in enumerate(zip(times, locs)):  # loop through all planes
+            p_cfg = self.plane_configs[self.planes[idx]]
 
-        active_flight = self.flights[f_idx] if 0 <= f_idx < len(self.flights) else None
-        active_origin = active_flight["origin"] if active_flight is not None else None
-        active_start_t = (
-            float(active_flight["start"]) if active_flight is not None else 0.0
-        )
-
-        for plane_idx, (t, loc) in enumerate(zip(times, locs)):
-            fleet_elements.append(float(t) / self.operation_time)
-
-            one_hot = [0.0] * num_cities
-            one_hot[self.city_to_idx.get(loc, 0)] = 1.0
-            fleet_elements.extend(one_hot)
-
-            plane_name = self.planes[plane_idx]
-            plane_cfg = self.plane_configs[plane_name]
-            fleet_elements.append(float(plane_cfg["seats"]) / self.max_seats)
-            fleet_elements.append(float(plane_cfg["speed"]) / self.max_speed)
-            fleet_elements.append(float(plane_cfg["fuel_use"]) / self.max_fuel_use)
-            fleet_elements.append(
-                float(plane_cfg["rate_per_km"]) / self.max_rate_per_km
+            # Fast vectorized one-hot parsing via precomputed identity mapping matrix lookup arrays
+            fleet_list.append(float(t) / self.operation_time)
+            fleet_list.extend(self.city_one_hot_eye[self.city_to_idx.get(loc, 0)])
+            fleet_list.extend(
+                [
+                    float(p_cfg["seats"]) / self.max_seats,
+                    float(p_cfg["speed"]) / self.max_speed,
+                    float(p_cfg.get("hourly_cost", 0.0)) / max(1.0, self.max_hourly_cost),
+                    float(p_cfg.get("fixed_cost", 0.0)) / max(1.0, self.max_fixed_cost),
+                    1.0 if self.used_planes[idx] else 0.0,
+                ]
             )
 
-            if active_origin is not None:
-                reloc_dist = self.dist_dict.get(
-                    (loc, active_origin), self.max_reloc_dist
+            if active_origin:
+                dist = self.dist_dict.get((loc, active_origin), self.max_reloc_dist)
+                fleet_list.extend(
+                    [
+                        float(dist) / self.max_reloc_dist,
+                        max(active_start_t, t + (dist / (p_cfg["speed"] / 60))) / self.operation_time,
+                    ]
                 )
-                reloc_time = reloc_dist / (plane_cfg["speed"] / 60)
-                normalized_reloc_dist = float(reloc_dist) / self.max_reloc_dist
-                normalized_arrival = (
-                    max(active_start_t, t + reloc_time) / self.operation_time
-                )
-                fleet_elements.append(normalized_reloc_dist)
-                fleet_elements.append(normalized_arrival)
             else:
-                fleet_elements.extend([0.0, 0.0])
+                fleet_list.extend([0.0, 0.0])
 
-        # Add a normalized pointer to the active flight index being evaluated
-        fleet_elements.append(float(f_idx) / max(1, len(self.flights) - 1))
+        fleet_list.append(float(f_idx) / max(1, len(self.flights) - 1))
 
-        # CURRENT FLIGHT CONTEXT
-        if active_flight is not None:
-            active_orig = float(self.city_to_idx.get(active_flight["origin"], 0)) / max(
-                1, num_cities - 1
+        if active_f:
+            fleet_list.extend(
+                [
+                    float(self.city_to_idx.get(active_f["origin"], 0)) / max(1, self.num_cities - 1),
+                    float(self.city_to_idx.get(active_f["dest"], 0)) / max(1, self.num_cities - 1),
+                    float(active_f["start"]) / self.operation_time,
+                    float(active_f["pass"]) / self.avg_pass,
+                ]
             )
-            active_dest = float(self.city_to_idx.get(active_flight["dest"], 0)) / max(
-                1, num_cities - 1
-            )
-            active_start = float(active_flight["start"]) / self.operation_time
-            active_pass = float(active_flight["pass"]) / self.avg_pass
-            fleet_elements.extend([active_orig, active_dest, active_start, active_pass])
         else:
-            fleet_elements.extend([0.0, 0.0, 0.0, 0.0])
+            fleet_list.extend([0.0, 0.0, 0.0, 0.0])
 
-        # FLIGHT LIST (Variable Dimension: N x Features)
-        flight_matrix = []
-        for f in self.flights:
-            f_orig = float(self.city_to_idx.get(f["origin"], 0)) / max(
-                1, num_cities - 1
-            )
-            f_dest = float(self.city_to_idx.get(f["dest"], 0)) / max(1, num_cities - 1)
-            f_start = float(f["start"]) / self.operation_time
-            f_pass = float(f["pass"]) / self.avg_pass
-            flight_matrix.append([f_orig, f_dest, f_start, f_pass])
+        # SEQUENCE LENGTH INVARIANT LOOKAHEAD WINDOW INTERFACE MATRIX
+        matrix_list = []
+        if active_f:
+            for f in self.flights[f_idx : f_idx + self.flight_window_size]:
+                matrix_list.append(
+                    [
+                        float(self.city_to_idx.get(f["origin"], 0)) / max(1, self.num_cities - 1),
+                        float(self.city_to_idx.get(f["dest"], 0)) / max(1, self.num_cities - 1),
+                        float(f["start"]) / self.operation_time,
+                        float(f["pass"]) / self.avg_pass,
+                    ]
+                )
 
-        # Return them wrapped up as a tuple of numpy arrays
+        while len(matrix_list) < self.flight_window_size:
+            matrix_list.append([0.0, 0.0, 0.0, 0.0])
+
         return (
-            np.array(fleet_elements, dtype=np.float32),
-            np.array(flight_matrix, dtype=np.float32),
+            np.array(
+                fleet_list, dtype=np.float32
+            ),  # 1D flat array containing normalized metrics for every plane in the fleet concatenated with the current flight's requirements
+            np.array(
+                matrix_list, dtype=np.float32
+            ),  # 2D array of shape (flight_window_size, 4) representing a normalized snapshot of upcoming flight demands
         )
 
-    def get_state_dim(self):
-        """
-        Dynamically tracks layer widths based on geometry features.
-        Returns a tuple of (fleet_state_dim, individual_flight_feature_dim).
-        """
-        n_planes = len(self.planes)
-        n_cities = len(self.cities)
+    def get_state_dim(self) -> tuple[int, int]:
+        """Tracks input dimensions to guide neural sequence structural layer sizes."""
+        return (len(self.planes) * (1 + self.num_cities + 7) + 1 + 4, 4)
 
-        per_plane_features = (
-            1 + n_cities + 6
-        )  # time + location one-hot + static and relocation features
-        fleet_dim = n_planes * per_plane_features + 1 + 4
-        flight_feature_dim = 4  # [origin_idx, dest_idx, norm_start, norm_passengers]
+    def get_action_mask(self, raw_state=None) -> np.ndarray:
+        """Returns a boolean mask of legal actions for the currently active flight."""
+        times, locs, f_idx = raw_state if raw_state is not None else (self.times, self.locs, self.current_f_idx)
 
-        return fleet_dim, flight_feature_dim
+        n_actions = len(self.planes)
+        if f_idx >= len(self.flights):
+            return np.ones(n_actions, dtype=np.bool_)
 
-    def simulate_step(self, action_idx):
-        """Calculates the reward for an action without updating the environment state."""
-        original_times = self.times
-        original_locs = self.locs
-        original_idx = self.current_f_idx
+        f = self.flights[f_idx]
 
-        res = self.step(action_idx)
+        # Legal actions are capacity-feasible; delay is handled by reward shaping.
+        mask = self.plane_seats >= float(f.get("pass", 0.0))
 
-        self.times = original_times
-        self.locs = original_locs
-        self.current_f_idx = original_idx
+        # Fallback when no plane is big enough: the largest plane, ties broken by least delay.
+        if not mask.any():
+            _, actual_start = self.relocation_estimates(times, locs, f)
+            delay = np.maximum(0.0, actual_start - f["start"])
+            largest = self.plane_seats == self.plane_seats.max()
+            mask[int(np.argmin(np.where(largest, delay, np.inf)))] = True
 
-        return res
+        return mask
 
-    def step(self, action_idx):
+    def step(self, action_idx: int) -> tuple[tuple[Any, ...], float, bool, dict]:
         f = self.flights[self.current_f_idx]
         p_name = self.planes[action_idx]
         p_cfg = self.plane_configs[p_name]
 
-        p_free_time = self.times[action_idx]
-        p_loc = self.locs[action_idx]
+        p_free_time, p_loc = self.times[action_idx], self.locs[action_idx]
+        reloc_dist = self.dist_dict.get((p_loc, f["origin"]), DEFAULT_DIST_KM)
+        flight_dist = self.dist_dict.get((f["origin"], f["dest"]), DEFAULT_DIST_KM)
 
-        # Logistics
-        reloc_dist = self.dist_dict.get((p_loc, f["origin"]), 500)
-        flight_dist = self.dist_dict.get((f["origin"], f["dest"]), 500)
-        reloc_time = reloc_dist / (p_cfg["speed"] / 60)
-
-        actual_start = max(f["start"], p_free_time + reloc_time)
+        actual_start = max(f["start"], p_free_time + (reloc_dist / (p_cfg["speed"] / 60)))
         arrival_at_dest = actual_start + (flight_dist / (p_cfg["speed"] / 60))
 
-        # Economics
-        ticket_price = p_cfg["base_fare"] + (flight_dist * p_cfg["rate_per_km"])
-        revenue = min(f["pass"], p_cfg["seats"]) * ticket_price
-        fuel_cost = (
-            (reloc_dist + flight_dist) * (p_cfg["fuel_use"] / 100) * self.fuel_price
+        # Financial balance computations
+        # served_ratio = min(1.0, float(p_cfg["seats"]) / max(1.0, float(f.get("pass", 1))))
+        revenue = float(f.get("total_ticket_price", 0.0))  # * served_ratio
+        operating_cost = float(p_cfg.get("hourly_cost", 0.0)) * (
+            ((reloc_dist + flight_dist) / (p_cfg["speed"] / 60)) / 60
+        )
+        assignment_cost = operating_cost + (
+            0.0 if self.used_planes[action_idx] else float(p_cfg.get("fixed_cost", 0.0))
         )
 
-        # Reward Clipping
-        delay_mins = max(0, actual_start - f["start"])
-        delay_penalty = delay_mins * f["pass"] * self.penalty_per_min
+        delay_minutes = max(0.0, actual_start - f["start"])
+        delay_multiplier = 1.0 + min(delay_minutes / 60.0, 2.0)
+        delay_penalty = delay_minutes * f["pass"] * self.penalty_per_min * delay_multiplier
+        slack_penalty = capacity_slack_penalty(f, p_cfg["seats"])
+        relocation_penalty = RELOCATION_PENALTY_PER_KM * reloc_dist
+        reward = (
+            revenue
+            - assignment_cost
+            - (min(delay_penalty, DELAY_PENALTY_CAP) if self.use_clipping else delay_penalty)
+            - relocation_penalty
+            - slack_penalty
+        )
         if self.use_clipping:
-            reward = revenue - fuel_cost - min(delay_penalty, 20000)
-            reward = max(-30000, reward)
-        else:
-            reward = revenue - fuel_cost - delay_penalty
+            reward = max(REWARD_FLOOR, reward)
 
-        # State Update
-        new_times = list(self.times)
-        new_locs = list(self.locs)
+        # Apply structural mutations safely across elements
+        new_times, new_locs, new_used = (
+            list(self.times),
+            list(self.locs),
+            list(self.used_planes),
+        )
         new_times[action_idx] = arrival_at_dest
         new_locs[action_idx] = f["dest"]
+        new_used[action_idx] = True
 
-        self.times, self.locs = tuple(new_times), tuple(new_locs)
+        self.times, self.locs, self.used_planes = (
+            tuple(new_times),
+            tuple(new_locs),
+            tuple(new_used),
+        )
         self.current_f_idx += 1
-        done = self.current_f_idx >= len(self.flights)
 
-        info = {
-            "actual_start": actual_start,
-            "arrival_at_dest": arrival_at_dest,
-            "p_curr_loc": p_loc,
-        }
+        return (
+            (self.times, self.locs, self.current_f_idx),
+            reward,
+            (self.current_f_idx >= len(self.flights)),
+            {
+                "actual_start": actual_start,
+                "arrival_at_dest": arrival_at_dest,
+                "p_curr_loc": p_loc,
+                "assignment_cost": assignment_cost,
+                "revenue": revenue,
+                "delay_minutes": delay_minutes,
+                "delay_penalty": delay_penalty,
+                # "served_ratio": served_ratio,
+                "capacity_slack_penalty": slack_penalty,
+                "relocation_penalty": relocation_penalty,
+            },
+        )
 
-        return (self.times, self.locs, self.current_f_idx), reward, done, info
 
-
+# --- STRUCTURAL BASELINE SOLVER INTERFACES ---
 class BaseSolver:
-    def choose_action(self, state, env):
+    def choose_action(self, state, env: AirlineEnv) -> int:
         raise NotImplementedError
 
 
 class RandomSolver(BaseSolver):
-    def choose_action(self, state, env):
+    def choose_action(self, state, env: AirlineEnv) -> int:
         return random.randint(0, len(env.planes) - 1)
 
 
 class ClosestPlaneGreedySolver(BaseSolver):
-    """Picks the plane that is physically closest to the flight's origin and can arrive soonest."""
+    """Assigns the craft that minimizes delay and relocation, strictly prioritizing sufficient passenger capacity."""
 
-    def choose_action(self, state, env):
+    def choose_action(self, state, env: AirlineEnv) -> int:
         f = env.flights[env.current_f_idx]
-        best_action = 0
-        min_waste = float("inf")
+        reloc_dist, actual_start = env.relocation_estimates(env.times, env.locs, f)
+        waste = (actual_start - f["start"]) + reloc_dist / 100.0
 
-        for action_idx, p_name in enumerate(env.planes):
-            p_cfg = env.plane_configs[p_name]
-            p_loc = env.locs[action_idx]
-            p_free_time = env.times[action_idx]
-
-            reloc_dist = env.dist_dict.get((p_loc, f["origin"]), 500)
-            reloc_time = reloc_dist / (p_cfg["speed"] / 60)
-
-            actual_start_possible = max(f["start"], p_free_time + reloc_time)
-            delay_waste = actual_start_possible - f["start"]
-            total_waste_score = delay_waste + (reloc_dist / 100)
-
-            if total_waste_score < min_waste:
-                min_waste = total_waste_score
-                best_action = action_idx
-
-        return best_action
+        # Least-waste plane among those with enough seats; if none has enough, least-waste overall.
+        capable = env.plane_seats >= float(f.get("pass", 1))
+        if capable.any():
+            waste = np.where(capable, waste, np.inf)
+        return int(np.argmin(waste))
 
 
 class DQNSolver(BaseSolver):
-    """Deep Q-Network sequence-invariant valuation wrapper."""
-
     def __init__(self, agent):
         self.agent = agent
 
-    def choose_action(self, state, env=None):
-        """
-        Accepts the execution parameters natively from the test runner.
-        Passes the state tuple straight to the agent without splitting it.
-        """
-        return self.agent.choose_action(state, use_epsilon=False)
+    def choose_action(self, state, env: AirlineEnv | None = None) -> int:
+        action_mask = env.get_action_mask() if env is not None else None
+        return self.agent.choose_action(
+            state,
+            action_mask=action_mask,
+            use_epsilon=False,
+        )
 
 
-class QLearningSolver(BaseSolver):
-    """Q-Learning evaluation wrapper for raw environment states."""
+# --- CONSOLIDATED CROSS-VALIDATION UNIFIED TESTING STAGE ENGINE ---
+def run_unified_execution(
+    env: AirlineEnv,
+    solver: BaseSolver,
+    flights: list,
+    solver_name: str = "SOLVER",
+    verbose: bool = False,
+) -> tuple[float, float]:
+    """Runs `solver` over the full schedule and returns (total_profit, total_delay_minutes).
 
-    def __init__(self, agent):
-        self.agent = agent
+    verbose=True logs a line per flight -- useful for inspecting a small instance, but slow and
+    very noisy on ROADEF-sized ones, hence off by default.
+    """
+    state = env.get_vector_state(env.reset_with_schedule(flights))
+    total_profit, total_delay_mins, done = 0.0, 0.0, False
 
-    def choose_action(self, state, env: AirlineEnv):
-        """Use the raw environment state for the Q-learning agent."""
-        raw_state = (env.times, env.locs, env.current_f_idx)
-        return self.agent.choose_action(raw_state, use_epsilon=False)
-
-
-def run_unified_execution(env, solver, flights, name="SOLVER"):
-    logger.info(f"\n{'=' * 30} {name.upper()} EXECUTION {'=' * 30}")
-
-    # Initialize schedule structure tracking variables
-    raw_state = env.reset_with_schedule(flights)
-    state = env.get_vector_state(raw_state)
-    total_profit = 0
-    total_delay_mins = 0
-    done = False
-
-    header = (
-        f"{'FLIGHT':<8} | {'PAX':<4} | {'PLANE':<10} | {'FROM':<6} | {'ORIGIN':<8} | "
-        f"{'DEST':<6} | {'SCHED':>5} | {'ACTUAL':>6} | {'ARRIVE':>6} | {'PROFIT'}"
-    )
-    line_width = len(header) + 2
-    logger.info(header)
-    logger.info("-" * line_width)
+    if verbose:
+        log_subsection(f"Schedule executed by {solver_name}")
+        logger.info("  legend: (!) delayed | (*) relocated | SCHED/ACTUAL/ARRIVE in minutes from T=0")
+        logger.info(
+            f"  {'FLIGHT':<8} | {'PAX':<4} | {'PLANE':<10} | {'FROM':<6} | "
+            f"{'ORIGIN':<8} | {'DEST':<6} | {'SCHED':>5} | {'ACTUAL':>6} | "
+            f"{'ARRIVE':>6} | {'PROFIT'}"
+        )
 
     while not done:
         f = flights[env.current_f_idx]
+
         action = solver.choose_action(state, env)
+        plane_start_loc = env.locs[action]
         p_name = env.planes[action]
 
-        plane_start_loc = env.locs[action]
-
         next_raw_state, reward, done, info = env.step(action)
-        next_state = env.get_vector_state(next_raw_state)
-
-        flight_delay = max(0, info["actual_start"] - f["start"])
+        flight_delay = max(0.0, info["actual_start"] - f["start"])
         total_delay_mins += flight_delay
         total_profit += reward
 
-        delay_flag = "!" if flight_delay > 0 else ""
-        act_start_disp = f"{info['actual_start']:>4.0f}{delay_flag}"
-
         relocated = plane_start_loc != f["origin"]
-        from_disp = plane_start_loc[:6] if relocated else "-"
-        orig_disp = f"{f['origin']}{'*' if relocated else ''}"
+        from_display = plane_start_loc[:6] if relocated else "-"
+        origin_display = f"{f['origin']}*" if relocated else f["origin"]
+        actual_start_display = f"{info['actual_start']:.0f}!" if flight_delay > 0 else f"{info['actual_start']:.0f}"
 
-        logger.info(
-            f"{f['id']:<8} | {f['pass']:<4} | {p_name.upper():<10} | {from_disp:<6} | "
-            f"{orig_disp:<8} | {f['dest']:<6} | {f['start']:>5.0f} | {act_start_disp:>6} | "
-            f"{info['arrival_at_dest']:>6.0f} | ${reward:>10,.0f}"
-        )
-        # Advance evaluation state so the next decision uses the updated environment.
-        state = next_state
+        if verbose:
+            logger.info(
+                f"  {f['id']:<8} | {f['pass']:<4} | {p_name.upper():<10} | "
+                f"{from_display:<6} | {origin_display:<8} | "
+                f"{f['dest']:<6} | {f['start']:>5.0f} | {actual_start_display:>6} | "
+                f"{info['arrival_at_dest']:>6.0f} | ${reward:>10,.0f}"
+            )
+        state = env.get_vector_state(next_raw_state)
 
-    logger.info("-" * line_width)
-    logger.info(f"TOTAL {name.upper()} PROFIT: ${total_profit:>12,.2f}")
-    logger.info(f"TOTAL SYSTEM DELAY: {total_delay_mins:.0f} minutes")
-    logger.info(
-        "LEGEND: (!) Delayed | (*) Relocated | SCHED/ACTUAL/ARRIVE in minutes from T=0"
-    )
-    logger.info("=" * line_width + "\n")
+    if verbose:
+        logger.info(f"  total profit ${total_profit:,.2f} | total delay {total_delay_mins:,.0f} min")
 
     return total_profit, total_delay_mins

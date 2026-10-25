@@ -4,24 +4,51 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.amp.grad_scaler import GradScaler
 
 
 class AttentionPoolingQNetwork(nn.Module):
-    """Deep Sets Q-Network using max-pooling to achieve sequence-length invariance."""
+    """
+    Deep Sets Q-Network with learned attention over the flight lookahead window.
+    Supports a pure mean-pooling aggregate baseline when use_attention=False.
+    """
 
-    def __init__(self, fleet_dim, flight_feature_dim, hidden_dim=128, n_actions=3):
+    def __init__(
+        self,
+        fleet_dim,
+        flight_feature_dim,
+        hidden_dim=128,
+        n_actions=3,
+        use_attention=True,
+    ):
         super(AttentionPoolingQNetwork, self).__init__()
+        self.use_attention = bool(use_attention)
 
-        # The 'Phi' network: Processes each individual flight's features independently
+        # The 'Phi' network: Processes each individual flights features independently
         self.flight_encoder = nn.Sequential(
             nn.Linear(flight_feature_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # The 'Rho' network: Processes the aggregated global schedule combined with active aircraft statuses
+        # Conditionally allocate attention parameters to prevent parameter spillage
+        if self.use_attention:
+            attention_hidden_dim = max(16, hidden_dim // 2)
+            self.flight_attention = nn.Sequential(
+                nn.Linear(hidden_dim, attention_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(attention_hidden_dim, 1),
+            )
+            # Input dimension to final layers: attended_context + max_context + fleet_dim
+            final_input_dim = hidden_dim * 2 + fleet_dim
+        else:
+            self.flight_attention = None
+            # Input dimension to final layers: mean_context + fleet_dim
+            final_input_dim = hidden_dim + fleet_dim
+
+        # The 'Rho' network: Processes aggregated features combined with aircraft statuses
         self.final_layers = nn.Sequential(
-            nn.Linear(hidden_dim + fleet_dim, hidden_dim),
+            nn.Linear(final_input_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, n_actions),
         )
@@ -36,34 +63,86 @@ class AttentionPoolingQNetwork(nn.Module):
         # Encode all flights into hidden feature matrices
         encoded_flights = self.flight_encoder(flight_matrix)
 
-        # Symmetric Mean-Pooling along the flight sequence dimension (dim=1)
-        # This preserves schedule distribution information and avoids losing signal
-        # from the current/active flight feature embedding.
-        pooled_context = encoded_flights.mean(dim=1)
+        # Masking padding elements (where features are completely zeroed)
+        valid_flights = flight_matrix.abs().sum(dim=-1) > 0
+        encoded_flights = encoded_flights * valid_flights.unsqueeze(-1)
 
-        # Combine systemic context bottleneck with static plane allocations
-        combined_features = torch.cat([pooled_context, fleet_state], dim=1)
+        mask_fill_value = torch.finfo(encoded_flights.dtype).min
+
+        # Direct verification of the layers existence satisfies Pylance type validation safely
+        if self.use_attention and self.flight_attention is not None:
+            # Compute attention weights over valid items
+            attention_logits = self.flight_attention(encoded_flights).squeeze(-1)
+            attention_logits = attention_logits.masked_fill(~valid_flights, mask_fill_value)
+            attention_weights = torch.softmax(attention_logits, dim=1)
+
+            # Extract weighted context
+            context = torch.sum(encoded_flights * attention_weights.unsqueeze(-1), dim=1)
+
+            # Extract max context (highest-pressure specific flight signature)
+            masked_encoded = encoded_flights.masked_fill(~valid_flights.unsqueeze(-1), mask_fill_value)
+            max_context = masked_encoded.max(dim=1).values
+            max_context = torch.where(torch.isfinite(max_context), max_context, torch.zeros_like(max_context))
+
+            # Concatenate all features
+            combined_features = torch.cat([context, max_context, fleet_state], dim=1)
+        else:
+            # Clean aggregate mean pooling over active flights without maximum leaks
+            valid_counts = valid_flights.sum(dim=1, keepdim=True).clamp(min=1)
+            context = encoded_flights.sum(dim=1) / valid_counts.to(encoded_flights.dtype)
+
+            # Concatenate features
+            combined_features = torch.cat([context, fleet_state], dim=1)
 
         # Map projections to Q-values per plane asset
         return self.final_layers(combined_features)
 
 
 class ReplayBuffer:
-    """Prioritized experience replay buffer."""
+    """Prioritized experience replay buffer backed by preallocated numpy arrays (one per field).
 
-    def __init__(self, capacity=20000, alpha=0.6, beta=0.4, beta_increment=1e-4):
+    Storage is allocated on the first push, once the state shapes are known. Sampling is plain
+    fancy indexing into those arrays, instead of rebuilding a batch from a list of tuples.
+    """
+
+    # (field name, numpy dtype) in the order push() receives and sample() returns them.
+    _FIELDS = (
+        ("fleet", np.float32),
+        ("flights", np.float32),
+        ("action", np.int64),
+        ("reward", np.float32),
+        ("next_fleet", np.float32),
+        ("next_flights", np.float32),
+        ("done", np.float32),
+        ("action_mask", np.bool_),
+        ("next_action_mask", np.bool_),
+        ("expert_action", np.int64),
+    )
+
+    def __init__(self, capacity=20000, alpha=0.4, beta=0.4, beta_increment=5e-5):
         self.capacity = capacity
         self.alpha = alpha
         self.beta = beta
         self.beta_increment = beta_increment
-        self.buffer = []
         self.priorities = np.zeros(capacity, dtype=np.float32)
         self.position = 0
+        self.size = 0
+        self._storage: dict[str, np.ndarray] = {}
 
     def push(
-        self, fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done
+        self,
+        fleet_state,
+        flight_matrix,
+        action,
+        reward,
+        next_fleet,
+        next_flights,
+        done,
+        action_mask,
+        next_action_mask,
+        expert_action,
     ):
-        transition = (
+        values = (
             fleet_state,
             flight_matrix,
             action,
@@ -71,59 +150,41 @@ class ReplayBuffer:
             next_fleet,
             next_flights,
             done,
+            action_mask,
+            next_action_mask,
+            expert_action,
         )
+        if not self._storage:
+            # np.zeros is lazily backed by the OS, so untouched capacity costs no real memory.
+            for (name, dtype), value in zip(self._FIELDS, values):
+                self._storage[name] = np.zeros((self.capacity, *np.shape(value)), dtype=dtype)
 
-        max_priority = self.priorities.max() if self.buffer else 1.0
+        for (name, _), value in zip(self._FIELDS, values):
+            self._storage[name][self.position] = value
 
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(transition)
-        else:
-            self.buffer[self.position] = transition
-
-        self.priorities[self.position] = max_priority
+        self.priorities[self.position] = self.priorities.max() if self.size else 1.0
         self.position = (self.position + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size):
-        priorities = self.priorities[: len(self.buffer)]
-        scaled_priorities = priorities**self.alpha
+        scaled_priorities = self.priorities[: self.size] ** self.alpha
         sampling_probabilities = scaled_priorities / scaled_priorities.sum()
 
-        indices = np.random.choice(
-            len(self.buffer), batch_size, p=sampling_probabilities
-        )
-        samples = [self.buffer[idx] for idx in indices]
+        indices = np.random.choice(self.size, batch_size, p=sampling_probabilities)
 
-        weights = (len(self.buffer) * sampling_probabilities[indices]) ** (-self.beta)
+        weights = (self.size * sampling_probabilities[indices]) ** (-self.beta)
         weights /= weights.max()
         self.beta = min(1.0, self.beta + self.beta_increment)
 
-        # Unpack elements independently to build structural numpy arrays cleanly
-        fleet_b = np.array([s[0] for s in samples], dtype=np.float32)
-        flights_b = np.array([s[1] for s in samples], dtype=np.float32)
-        action_b = np.array([s[2] for s in samples], dtype=np.int64)
-        reward_b = np.array([s[3] for s in samples], dtype=np.float32)
-        next_fleet_b = np.array([s[4] for s in samples], dtype=np.float32)
-        next_flights_b = np.array([s[5] for s in samples], dtype=np.float32)
-        done_b = np.array([s[6] for s in samples], dtype=np.float32)
-
-        return (
-            indices,
-            weights.astype(np.float32),
-            fleet_b,
-            flights_b,
-            action_b,
-            reward_b,
-            next_fleet_b,
-            next_flights_b,
-            done_b,
-        )
+        batch = tuple(self._storage[name][indices] for name, _ in self._FIELDS)
+        return (indices, weights.astype(np.float32), *batch)
 
     def __len__(self):
-        return len(self.buffer)
+        return self.size
 
     def update_priorities(self, indices, priorities):
-        for idx, priority in zip(indices, priorities):
-            self.priorities[idx] = max(float(priority), 1e-6)
+        priorities = np.nan_to_num(np.asarray(priorities, dtype=np.float64), nan=1.0, posinf=1.0, neginf=1.0)
+        self.priorities[indices] = np.maximum(priorities, 1e-6)
 
 
 class DQNAgent:
@@ -139,6 +200,11 @@ class DQNAgent:
         min_epsilon=0.01,
         batch_size=64,
         tau=0.005,
+        hidden_dim=256,
+        use_attention=True,
+        use_expert_bias=True,
+        expert_bias_weight=0.1,
+        use_action_masking=True,
     ):
         self.fleet_dim = fleet_dim
         self.flight_feature_dim = flight_feature_dim
@@ -149,75 +215,139 @@ class DQNAgent:
         self.min_epsilon = min_epsilon
         self.batch_size = batch_size
         self.tau = tau
+        self.use_expert_bias = bool(use_expert_bias)
+        self.expert_bias_weight = float(expert_bias_weight)
+        self.use_action_masking = bool(use_action_masking)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.use_amp = self.device.type == "cuda"
 
-        # Main Network (used to pick actions and updated every step)
         self.policy_net = AttentionPoolingQNetwork(
-            fleet_dim, flight_feature_dim, n_actions=n_actions
+            fleet_dim,
+            flight_feature_dim,
+            hidden_dim=hidden_dim,
+            n_actions=n_actions,
+            use_attention=use_attention,
         ).to(self.device)
-        # Target Network (held stable to compute steady bellman targets)
+
         self.target_net = AttentionPoolingQNetwork(
-            fleet_dim, flight_feature_dim, n_actions=n_actions
+            fleet_dim,
+            flight_feature_dim,
+            hidden_dim=hidden_dim,
+            n_actions=n_actions,
+            use_attention=use_attention,
         ).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.loss_fn = nn.SmoothL1Loss(reduction="none")
-        self.memory = ReplayBuffer(capacity=20000)
 
-    def choose_action(self, state_tuple, use_epsilon=True):
-        """Selects action using epsilon-greedy strategy over structural environment states."""
+        if self.use_expert_bias:
+            self.imitation_loss_fn = nn.CrossEntropyLoss()
+        else:
+            self.imitation_loss_fn = None
+
+        self.memory = ReplayBuffer(capacity=20000, alpha=0.4, beta=0.4, beta_increment=5e-5)
+        self.scaler = GradScaler("cuda", enabled=self.use_amp)
+
+    def _to_device_tensor(self, value, dtype=torch.float32):
+        return torch.as_tensor(value, dtype=dtype, device=self.device)
+
+    def _optimizer_step(self, loss):
+        self.optimizer.zero_grad(set_to_none=True)
+        if self.use_amp:
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
+            self.optimizer.step()
+
+    def _normalize_action_mask(self, action_mask):
+        if action_mask is None:
+            return np.ones(self.n_actions, dtype=np.bool_)
+        mask = np.asarray(action_mask, dtype=np.bool_).reshape(-1)
+        if mask.size != self.n_actions:
+            raise ValueError(f"Action mask size {mask.size} does not match n_actions={self.n_actions}.")
+        if not mask.any():
+            mask[:] = True
+        return mask
+
+    def choose_action(self, state_tuple, action_mask=None, use_epsilon=True):
+        valid_mask = self._normalize_action_mask(action_mask if self.use_action_masking else None)
+        valid_actions = np.flatnonzero(valid_mask)
+
         if use_epsilon and random.random() < self.epsilon:
-            return random.randint(0, self.n_actions - 1)
+            return int(np.random.choice(valid_actions))
 
-        # Unpack the tuple internal array layers inside the method scope
         fleet_state, flight_matrix = state_tuple
-
-        with torch.no_grad():
-            fleet_t = torch.FloatTensor(fleet_state).to(self.device)
-            flights_t = torch.FloatTensor(flight_matrix).to(self.device)
+        with torch.inference_mode():
+            fleet_t = self._to_device_tensor(fleet_state)
+            flights_t = self._to_device_tensor(flight_matrix)
             q_values = self.policy_net(fleet_t, flights_t)
-            return q_values.argmax(dim=1).item()
+
+            mask_t = self._to_device_tensor(valid_mask, dtype=torch.bool).unsqueeze(0)
+            masked_q = q_values.masked_fill(~mask_t, float("-inf"))
+            return masked_q.argmax(dim=1).item()
 
     def decay_epsilon(self):
-        """Smoothly dials back exploration over training iterations."""
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
 
     def store_transition(
-        self, fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done
+        self,
+        fleet_state,
+        flight_matrix,
+        action,
+        reward,
+        next_fleet,
+        next_flights,
+        done,
+        action_mask,
+        next_action_mask,
+        expert_action,
     ):
-        """Pushes a structural state transformation tracking sequence to the replay memory."""
+        safe_action_mask = self._normalize_action_mask(action_mask if self.use_action_masking else None)
+        safe_next_action_mask = self._normalize_action_mask(next_action_mask if self.use_action_masking else None)
         self.memory.push(
-            fleet_state, flight_matrix, action, reward, next_fleet, next_flights, done
+            fleet_state,
+            flight_matrix,
+            action,
+            reward,
+            next_fleet,
+            next_flights,
+            done,
+            safe_action_mask,
+            safe_next_action_mask,
+            expert_action,
         )
 
     def _polyak_update(self):
-        """Blends weights fractionally from policy network to target network."""
         with torch.no_grad():
-            for target_param, policy_param in zip(
-                self.target_net.parameters(), self.policy_net.parameters()
-            ):
-                target_param.data.copy_(
-                    self.tau * policy_param.data + (1.0 - self.tau) * target_param.data
-                )
+            for target_param, policy_param in zip(self.target_net.parameters(), self.policy_net.parameters()):
+                target_param.data.copy_(self.tau * policy_param.data + (1.0 - self.tau) * target_param.data)
 
     def _sample_training_batch(self):
         return self.memory.sample(self.batch_size)
 
     def _compute_weighted_td_loss(self, current_q, target_q, weights_t):
+        current_q = torch.nan_to_num(current_q, nan=0.0, posinf=1e4, neginf=-1e4)
+        target_q = torch.nan_to_num(target_q, nan=0.0, posinf=1e4, neginf=-1e4)
         td_errors = current_q - target_q
+        td_errors = torch.nan_to_num(td_errors, nan=0.0, posinf=1e4, neginf=-1e4)
         per_sample_loss = self.loss_fn(current_q, target_q)
+        per_sample_loss = torch.nan_to_num(per_sample_loss, nan=0.0, posinf=1e4, neginf=1e4)
         loss = (weights_t * per_sample_loss).mean()
         return loss, td_errors
 
     def learn(self):
-        """Samples a multi-component batch and performs one step of gradient descent."""
         if len(self.memory) < self.batch_size:
             return
 
-        # Sample data arrays from experience buffer
+        batch = self._sample_training_batch()
         (
             indices,
             weights,
@@ -228,42 +358,59 @@ class DQNAgent:
             next_fleet_b,
             next_flights_b,
             dones,
-        ) = self._sample_training_batch()
+            action_masks,
+            next_action_masks,
+            expert_actions,
+        ) = batch
 
-        # Convert layout blocks into PyTorch Tensors
-        fleet_t = torch.FloatTensor(fleet_b).to(self.device)
-        flights_t = torch.FloatTensor(flights_b).to(self.device)
-        actions_t = torch.LongTensor(actions).unsqueeze(1).to(self.device)
-        rewards_t = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        next_fleet_t = torch.FloatTensor(next_fleet_b).to(self.device)
-        next_flights_t = torch.FloatTensor(next_flights_b).to(self.device)
-        dones_t = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
-        weights_t = torch.FloatTensor(weights).unsqueeze(1).to(self.device)
+        # Push everything to tensors
+        fleet_t = self._to_device_tensor(fleet_b)
+        flights_t = self._to_device_tensor(flights_b)
+        actions_t = self._to_device_tensor(actions, dtype=torch.long).unsqueeze(1)
+        rewards_t = self._to_device_tensor(rewards).unsqueeze(1)
+        next_fleet_t = self._to_device_tensor(next_fleet_b)
+        next_flights_t = self._to_device_tensor(next_flights_b)
+        dones_t = self._to_device_tensor(dones).unsqueeze(1)
+        weights_t = self._to_device_tensor(weights).unsqueeze(1)
+        action_masks_t = self._to_device_tensor(action_masks, dtype=torch.bool)
+        next_action_masks_t = self._to_device_tensor(next_action_masks, dtype=torch.bool)
 
-        # Get predicted Q-values for the actions taken
-        current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
+        with torch.autocast(device_type="cuda", enabled=self.use_amp):
+            # Current Q-values
+            q_logits = self.policy_net(fleet_t, flights_t)
+            current_q = q_logits.gather(1, actions_t)
 
-        # Calculate target values using the Target Network (Bellman Equation)
-        with torch.no_grad():
-            max_next_q = self.target_net(next_fleet_t, next_flights_t).max(
-                dim=1, keepdim=True
-            )[0]
-            target_q = rewards_t + (1 - dones_t) * self.gamma * max_next_q
+            # Target Q-values (Standard DQN: max over target network)
+            with torch.no_grad():
+                next_q = self.target_net(next_fleet_t, next_flights_t)
+                if self.use_action_masking:
+                    next_q = next_q.masked_fill(~next_action_masks_t, float("-inf"))
 
-        loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
+                max_next_q = next_q.max(dim=1, keepdim=True)[0]
+                max_next_q = torch.nan_to_num(max_next_q, nan=0.0, posinf=1e4, neginf=-1e4)
+                target_q = rewards_t + (1 - dones_t) * self.gamma * max_next_q
 
-        # Optimize the Policy Network
-        self.optimizer.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
-        self.optimizer.step()
+            # TD Loss
+            loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
 
+            # Imitation Loss / Expert Bias (Masking Optional)
+            if self.use_expert_bias and self.imitation_loss_fn is not None:
+                expert_actions_t = self._to_device_tensor(expert_actions, dtype=torch.long)
+
+                q_for_imitation = (
+                    q_logits.masked_fill(~action_masks_t, float("-inf")) if self.use_action_masking else q_logits
+                )
+                imitation_loss = self.imitation_loss_fn(q_for_imitation, expert_actions_t)
+                total_loss = loss + (self.expert_bias_weight * imitation_loss)
+            else:
+                total_loss = loss
+
+        # Optimize & Update PER priorities
+        self._optimizer_step(total_loss)
         self.memory.update_priorities(
             indices,
             np.atleast_1d(np.abs(td_errors.detach().cpu().numpy()).squeeze()) + 1e-6,
         )
-
-        # Execute soft target updating
         self._polyak_update()
 
 
@@ -271,10 +418,10 @@ class DoubleDQNAgent(DQNAgent):
     """Double DQN agent using policy network for action selection and target network for value evaluation."""
 
     def learn(self):
-        """Performs a DDQN update step using the policy network for argmax selection."""
         if len(self.memory) < self.batch_size:
             return
 
+        batch = self._sample_training_batch()
         (
             indices,
             weights,
@@ -285,37 +432,61 @@ class DoubleDQNAgent(DQNAgent):
             next_fleet_b,
             next_flights_b,
             dones,
-        ) = self._sample_training_batch()
+            action_masks,
+            next_action_masks,
+            expert_actions,
+        ) = batch
 
-        fleet_t = torch.FloatTensor(fleet_b).to(self.device)
-        flights_t = torch.FloatTensor(flights_b).to(self.device)
-        actions_t = torch.LongTensor(actions).unsqueeze(1).to(self.device)
-        rewards_t = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        next_fleet_t = torch.FloatTensor(next_fleet_b).to(self.device)
-        next_flights_t = torch.FloatTensor(next_flights_b).to(self.device)
-        dones_t = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
-        weights_t = torch.FloatTensor(weights).unsqueeze(1).to(self.device)
+        # Push everything to tensors
+        fleet_t = self._to_device_tensor(fleet_b)
+        flights_t = self._to_device_tensor(flights_b)
+        actions_t = self._to_device_tensor(actions, dtype=torch.long).unsqueeze(1)
+        rewards_t = self._to_device_tensor(rewards).unsqueeze(1)
+        next_fleet_t = self._to_device_tensor(next_fleet_b)
+        next_flights_t = self._to_device_tensor(next_flights_b)
+        dones_t = self._to_device_tensor(dones).unsqueeze(1)
+        weights_t = self._to_device_tensor(weights).unsqueeze(1)
+        action_masks_t = self._to_device_tensor(action_masks, dtype=torch.bool)
+        next_action_masks_t = self._to_device_tensor(next_action_masks, dtype=torch.bool)
 
-        current_q = self.policy_net(fleet_t, flights_t).gather(1, actions_t)
+        with torch.autocast(device_type="cuda", enabled=self.use_amp):
+            # Current Q-values
+            q_logits = self.policy_net(fleet_t, flights_t)
+            current_q = q_logits.gather(1, actions_t)
 
-        with torch.no_grad():
-            next_policy_q = self.policy_net(next_fleet_t, next_flights_t)
-            next_actions = next_policy_q.argmax(dim=1, keepdim=True)
-            next_target_q = self.target_net(next_fleet_t, next_flights_t).gather(
-                1, next_actions
-            )
-            target_q = rewards_t + (1 - dones_t) * self.gamma * next_target_q
+            # Target Q-values (Double DQN: Action selection from Policy, evaluation from Target)
+            with torch.no_grad():
+                next_policy_q = self.policy_net(next_fleet_t, next_flights_t)
+                if self.use_action_masking:
+                    next_policy_q = next_policy_q.masked_fill(~next_action_masks_t, float("-inf"))
 
-        loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
+                # Selection
+                next_actions = next_policy_q.argmax(dim=1, keepdim=True)
 
-        self.optimizer.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
-        self.optimizer.step()
+                # Evaluation
+                next_target_q = self.target_net(next_fleet_t, next_flights_t).gather(1, next_actions)
+                next_target_q = torch.nan_to_num(next_target_q, nan=0.0, posinf=1e4, neginf=-1e4)
+                target_q = rewards_t + (1 - dones_t) * self.gamma * next_target_q
 
+            # TD Loss
+            loss, td_errors = self._compute_weighted_td_loss(current_q, target_q, weights_t)
+
+            # Imitation Loss / Expert Bias (Masking Optional)
+            if self.use_expert_bias and self.imitation_loss_fn is not None:
+                expert_actions_t = self._to_device_tensor(expert_actions, dtype=torch.long)
+
+                q_for_imitation = (
+                    q_logits.masked_fill(~action_masks_t, float("-inf")) if self.use_action_masking else q_logits
+                )
+                imitation_loss = self.imitation_loss_fn(q_for_imitation, expert_actions_t)
+                total_loss = loss + (self.expert_bias_weight * imitation_loss)
+            else:
+                total_loss = loss
+
+        # Optimize & Update PER priorities
+        self._optimizer_step(total_loss)
         self.memory.update_priorities(
             indices,
             np.atleast_1d(np.abs(td_errors.detach().cpu().numpy()).squeeze()) + 1e-6,
         )
-
         self._polyak_update()

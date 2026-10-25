@@ -1,135 +1,136 @@
 # ARP_RL
 
-Reinforcement learning project for airline plane assignment and schedule disruption handling.
+Reinforcement learning for airline aircraft-to-flight assignment and schedule disruption recovery,
+benchmarked on the ROADEF2009 competition instances.
 
 This repository contains:
-- Tabular Q-learning
-- DQN
-- Double DQN
-- Iterative training/evaluation pipelines
-- Baselines (random and greedy)
+- DQN and Double DQN agents (attention pooling over a flight lookahead window, prioritized replay,
+  optional imitation "expert bias" toward a greedy heuristic)
+- Random and greedy baselines
+- Experiment pipelines for instance generalization and disruption recovery
 
 ## Quick Start
 
-### 1. Install uv
-
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv --version
-```
-
-### 2. Install dependencies
-
-From repository root:
-
-```bash
-uv sync
-```
-
-### 3. Run the main training pipeline
-
-```bash
-uv run python -m src.iter_training
-```
-
-This is the primary entrypoint for current training/evaluation flow.
-
-## Environment Options
-
-Use one of these approaches:
-
-- Standard local `.venv` (recommended for most users):
-```bash
-uv sync
-source .venv/bin/activate
-```
-
-- Shared environment helper (project-specific workflow):
-```bash
-./activate_env.sh
+curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv
+uv sync                                            # install dependencies
+uv sync --extra gurobi                             # optional: optimal baseline solver (or --extra cplex)
+uv run python -m src.experiments.single_model_experiment
 ```
 
 ## Which Script Should I Run?
 
-- `python -m src.iter_training`
-	- Current modular training pipeline
-	- Trains Q-learning, DQN, Double DQN
-	- Saves checkpoints and runs final evaluation
+All experiment scripts live in `src/experiments/`, build their agents/instances through
+`src.experiments.experiment_setup` and `src.instances`, and write everything they produce to their
+own run folder (see *Run outputs*). Each has a `SEED` knob at the top (default: `SEED` in
+`src/config.py`): an int reproduces the same schedules and results on every rerun; `None` draws a
+fresh seed so every run gets genuinely new schedules. The seed actually used is always saved in
+the run's `config.json`, so any run can be reproduced by setting `SEED` to it.
 
-- `python -m src.main`
-	- Legacy/experimental script
-	- Useful for quick prototyping
-	- Not the canonical benchmark pipeline
+- `python -m src.experiments.single_model_experiment` — dev playground: one model, one schedule
+  (`SCHEDULE_TYPE` = `"sample"` real flights / `"random"` / `"trap"`, built from a ROADEF
+  instance, optionally downsized), one training iteration.
+- `python -m src.experiments.iter_training` — compare chosen `ACTIVE_ALGOS` × `ACTIVE_VARIANTS`
+  (plus Random/Greedy baselines) over `N_ITERATIONS` on a chosen schedule type; ends with a box
+  plot of each method's reward across iterations. `NEW_SCHEDULE_EACH_ITERATION=False` keeps
+  training the same agents on one schedule; `True` draws a new schedule (and new agents) every
+  iteration.
+- `python -m src.experiments.solving_schedule_experiment` — fresh sampled instance every
+  iteration, trains the active variants on each: generalization across instances.
+- `python -m src.experiments.disruption_training_experiment` — train on a schedule, then
+  repeatedly disrupt + retrain: disruption resilience.
 
-## Repository Navigation Guide
+## Run outputs
 
-### Top-level
+Every run writes to `runs/<timestamp>_<name>/` (gitignored):
 
-- `pyproject.toml`: dependencies and project metadata
-- `activate_env.sh`: helper for shared venv workflow
-- `checkpoints/`: saved model weights
-- `src/logs/`: training and evaluation logs
+- `config.json` — the script's own parameters, a snapshot of every `src/config.py` constant
+  (including `SEED`), and the git commit + whether the working tree was dirty
+- `run.log` — everything logged during the run
+- `results.pkl` — the raw results (what the analysis scripts read)
+- `metrics.json` — a short human-readable summary (where the experiment provides one)
+- `checkpoints/` — model weights from this run
 
-### Core code
+## Baselines
 
-- `src/config.py`
-	- Central configuration for:
-		- model hyperparameters
-		- episode counts / logging cadence
-		- reward scaling/clipping
-		- fleet and schedule defaults
+Every evaluation compares the agents with a Random and a Greedy baseline. Setting
+`INCLUDE_OPTIMAL_BASELINE = True` in an experiment script also adds the **optimal baseline**
+(`src/baselines/`): an exact model of `AirlineEnv`'s reward that finds the best possible plane
+assignment for each schedule, reported as e.g. `Gurobi (optimal)`.
 
-- `src/iter_training.py`
-	- Main orchestration script
-	- Builds environments/agents
-	- Runs train -> checkpoint -> evaluation loop
+- Pick the solver with `BASELINE_SOLVER_CONFIG["solver"]` in `src/config.py`: `"gurobi"`
+  (`uv sync --extra gurobi` + a Gurobi license) or `"cplex"` (`uv sync --extra cplex`). The model
+  is defined once (`optimal.py`); `gurobi_solver.py` and `cplex_solver.py` only translate it.
+- Only plans the solver has *proven* optimal are used (within `BASELINE_SOLVER_CONFIG["time_limit_s"]`).
+  Proving optimality gets hard fast: ~10 flights take about a second, 20 flights x 3 planes may not
+  finish in minutes. Set `BASELINE_SOLVER_CONFIG["require_optimal"] = False` to use the solver's
+  best plan within the time limit instead, reported as `<Solver> (best found)` -- a reference, not a
+  guaranteed optimum, so a trained agent can legitimately beat it.
+- Every plan is replayed through the real environment; if the reward differs from what the solver
+  predicted, it's treated as a solver failure rather than used.
+- If the solver fails on a schedule, the experiment draws a new schedule for the same iteration
+  (before training on it) instead of crashing; failures retrying can't fix, like a license size
+  limit, stop the run with a clear message.
+- To check for yourself that the model is aligned with the environment and truly optimal, run
+  `python -m src.baselines.verify_baseline` (options: `--solver cplex|gurobi|both`, `--cases`,
+  `--flights`, `--planes`, `--skip-brute-force`). It compares each solver's predicted reward with the
+  env's reward for its plan and with the best of *every* possible assignment (enumerated through the
+  env alone); `--solver both` also checks that CPLEX and Gurobi reach the same optimum.
+- Reward constants and the empty-seat formula live at the top of `src/utils/envs.py` and are shared
+  with the model; any other change to `AirlineEnv.step()` must be mirrored in
+  `src/baselines/optimal.py` (the replay check and the verifier will flag it if not).
+- `python -m src.workspace.gurobi` / `python -m src.workspace.cplex` print a flight-by-flight
+  comparison of the optimal plan with a Double DQN trained on the same schedule.
 
-- `src/agents/`
-	- `dqn_agent.py`: DQN + Double DQN implementations (with replay buffer)
-	- `q_learning_agent.py`: tabular Q-learning agent
+## Analysis
 
-- `src/training/`
-	- `initialization.py`: setup helpers (agents, filenames, static data)
-	- `loop.py`: training loops and early stopping
-	- `evaluation.py`: iteration and final scoreboards
+Plots and tables are separate from training, so results can be re-analysed without retraining:
 
+```bash
+python -m src.analysis.instance_sweep_plots --run runs/<run_id>          # one instance-sweep run
+python -m src.analysis.instance_sweep_plots --compare                     # random/trap/sample comparison
+python -m src.analysis.disruption_recovery_table                          # historical recovery table
+python -m src.analysis.disruption_recovery_table Trap=runs/<run_id> ...   # any LABEL=run pairs
+```
+
+The `--compare` / default inputs are the historical pickles in `data/experiments/`.
+
+## Problem Instances
+
+`src/instances/` is the single source of truth for building the FLIGHTS/PLANES/AIRPORTS/
+dist_dict inputs `AirlineEnv` expects:
+
+- `roadef.py`: `discover_roadef_instances(project_root)` lists the 20 real ROADEF2009 instances in
+  `data/` (A01-A10 at ~600 flights / 84 aircraft, B01-B10 at ~1300 flights / 251 aircraft), and
+  `load_roadef_instance(path)` loads one.
+- `scenarios.py`: `build_schedule(base, schedule_type, max_flights, max_planes, n_cities, seed)` —
+  the "sample" / "random" / "trap" schedule an experiment trains on, built from a loaded instance.
+- `common.py`: `subsample_instance` (downsize a loaded instance, seedable), plus
+  `build_flight_pool` / `build_planes`, the converters from raw tables into env inputs.
+- `synthetic.py`: `generate_random_flights` / `generate_trap_schedule` synthetic generators.
+
+## Repository Layout
+
+- `src/config.py` — hyperparameters, ablation variants (`AGENT_VARIANT_OVERRIDES`), disruption
+  severity, reward settings, `SEED`, `RUNS_DIR`
+- `src/agents/dqn_agent.py` — DQN + Double DQN, attention Q-network, numpy-backed prioritized replay buffer
+- `src/instances/` — problem-instance loading (see above)
+- `src/experiments/` — the entrypoints above, plus `experiment_setup.py` (shared variant building,
+  training, evaluation) and `run_tracking.py` (run folders)
+- `src/analysis/` — result plots and tables, reading saved results only
 - `src/utils/`
-	- `envs.py`: `AirlineEnv`, solver wrappers, execution runner
-	- `schedule.py`: schedule generators and feasibility checks
-	- `disruptions.py`: disruption injection utilities
-	- `dist.py`, `fleet.py`: support utilities
-
-## Typical Workflow for New Contributors
-
-1. Read `src/config.py` first to understand experiment settings.
-2. Run `python -m src.iter_training` and inspect `src/logs/plane_assignment.log`.
-3. Modify one layer at a time:
-	 - agent logic in `src/agents/`
-	 - reward/state dynamics in `src/utils/envs.py`
-	 - training behavior in `src/training/loop.py`
-4. Re-run and compare scoreboard outputs.
-
-## Output Artifacts
-
-- Checkpoints: `checkpoints/*.pth`
-- Runtime logs: `src/logs/plane_assignment.log`
+	- `envs.py`: `AirlineEnv`, baseline solvers, evaluation runner
+	- `training_engine.py`: agent initialization and the training loop
+	- `disruptions.py`: disruption injection
+	- `seeding.py`: `set_seed`
+	- `dist.py`: geodesic airport distances; `data_prep.py`: raw ROADEF table readers
+- `src/baselines/` — the optimal baseline (Gurobi or CPLEX) and its verifier (see *Baselines*)
+- `src/workspace/` — per-flight optimal-vs-Double-DQN comparison (`gurobi.py`, `cplex.py`)
 
 ## Linting and Checks
 
-If dev tools are installed:
-
 ```bash
-pre-commit
-```
-
-Or run targeted checks:
-
-```bash
+pre-commit            # or:
 uv run ruff check src
-uv run python -m py_compile src/iter_training.py src/training/*.py src/agents/*.py src/utils/*.py
+uv run ruff format src
 ```
-
-## Notes
-
-- Prefer `uv` commands to keep dependencies in sync.
-- Treat `src.iter_training` as the source of truth for experiments.
