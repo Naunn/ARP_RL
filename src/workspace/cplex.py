@@ -2,6 +2,7 @@
 trained on the same schedule."""
 
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -326,6 +327,7 @@ if __name__ == "__main__":
     print_schedule_table(flights, title="PRESCHEDULE")
     print_fleet_table(fleet)
 
+    solve_start = time.perf_counter()
     plan = solve_assignment(
         flights,
         fleet,
@@ -333,6 +335,8 @@ if __name__ == "__main__":
         penalty_per_min=REWARD_CONFIG["penalty_per_min"],
         use_clipping=REWARD_CONFIG["train_use_clipping"],
     )
+    solve_seconds = time.perf_counter() - solve_start
+    print(f"\nCPLEX solve time: {solve_seconds:.2f}s")
     objective_value = plan.objective
     assigned_plane_by_flight_id = {f["id"]: plane for f, plane in zip(flights, plan.planes)}
     assigned_records = [
@@ -368,6 +372,7 @@ if __name__ == "__main__":
     )
     print(f"\nEnvironment-style reward for the CPLEX schedule: {env_reward:,.2f}")
 
+    train_start = time.perf_counter()
     trained_agent, training_scores = train_double_dqn_on_schedule(
         assigned_records,
         fleet,
@@ -376,8 +381,11 @@ if __name__ == "__main__":
         use_clipping=REWARD_CONFIG["train_use_clipping"],
         n_episodes=500,
     )
+    train_seconds = time.perf_counter() - train_start
+    print(f"\nDouble DQN training time: {train_seconds:.2f}s")
     final_score = float(np.mean(training_scores[-10:])) if training_scores else 0.0
     print(f"Double DQN training score (mean of last 10 eps): {final_score:,.2f}")
+    inference_start = time.perf_counter()
     ddqn_reward, ddqn_breakdown = evaluate_double_dqn_with_env(
         trained_agent,
         assigned_records,
@@ -386,6 +394,7 @@ if __name__ == "__main__":
         penalty_per_min=REWARD_CONFIG["penalty_per_min"],
         use_clipping=REWARD_CONFIG["train_use_clipping"],
     )
+    inference_seconds = time.perf_counter() - inference_start
 
     cplex_reward, cplex_breakdown = evaluate_schedule_with_env(
         assigned_records,
@@ -437,3 +446,14 @@ if __name__ == "__main__":
     )
     print(f"\nCPLEX env-style total reward: {cplex_reward:,.2f}")
     print(f"Double DQN env-style total reward: {ddqn_reward:,.2f}")
+
+    print_pretty_table(
+        "TIME TAKEN (SECONDS)",
+        pd.DataFrame(
+            [
+                {"step": "CPLEX solve", "seconds": solve_seconds},
+                {"step": "Double DQN training", "seconds": train_seconds},
+                {"step": "Double DQN inference (one rollout)", "seconds": inference_seconds},
+            ]
+        ),
+    )

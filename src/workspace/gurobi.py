@@ -2,6 +2,7 @@
 trained on the same schedule."""
 
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -133,7 +134,7 @@ def replay_schedule_with_policy(
         plane_configs=fleet,
         dist_dict=dist_dict,
         cities=airports,
-        penalty_per_min=penalty_per_min,
+        penalty_per_min=penalty_per_min,  # type: ignore
         use_clipping=use_clipping,
     )
 
@@ -279,7 +280,7 @@ def train_double_dqn_on_schedule(
         plane_configs=fleet,
         dist_dict=dist_dict,
         cities=airports,
-        penalty_per_min=penalty_per_min,
+        penalty_per_min=penalty_per_min,  # type: ignore
         use_clipping=use_clipping,
     )
     agent = initialize_agent(env, DoubleDQNAgent, MODEL_HYPERPARAMS["DOUBLE_DQN"])
@@ -305,8 +306,10 @@ if __name__ == "__main__":
         subset="fixed_cost  hourly_cost initial_airport  seats  speed".split(),
     )
 
-    N = 40
+    N = 60
     P_N = 10
+    # True: Gurobi may only run as long as the Double DQN trained; False: default BASELINE_SOLVER_CONFIG limit
+    LIMIT_GUROBI_TO_DQN_TIME = True
 
     # C_N = 7
     # flights = build_schedule_pool(
@@ -330,13 +333,30 @@ if __name__ == "__main__":
     print_schedule_table(flights, title="PRESCHEDULE")
     print_fleet_table(fleet)
 
+    train_start = time.perf_counter()
+    trained_agent, training_scores = train_double_dqn_on_schedule(
+        flights,
+        fleet,
+        dist_matrix,
+        penalty_per_min=REWARD_CONFIG["penalty_per_min"],
+        use_clipping=REWARD_CONFIG["train_use_clipping"],
+        n_episodes=500,
+    )
+    train_seconds = time.perf_counter() - train_start
+    print(f"\nDouble DQN training time: {train_seconds:.2f}s")
+
+    solve_start = time.perf_counter()
     plan = solve_assignment(
         flights,
         fleet,
         dist_matrix,
         penalty_per_min=REWARD_CONFIG["penalty_per_min"],
         use_clipping=REWARD_CONFIG["train_use_clipping"],
+        require_optimal=False,
+        time_limit_s=train_seconds if LIMIT_GUROBI_TO_DQN_TIME else None,
     )
+    solve_seconds = time.perf_counter() - solve_start
+    print(f"\nGurobi solve time: {solve_seconds:.2f}s")
     objective_value = plan.objective
     assigned_plane_by_flight_id = {f["id"]: plane for f, plane in zip(flights, plan.planes)}
     assigned_records = [
@@ -372,16 +392,9 @@ if __name__ == "__main__":
     )
     print(f"\nEnvironment-style reward for the Gurobi schedule: {env_reward:,.2f}")
 
-    trained_agent, training_scores = train_double_dqn_on_schedule(
-        assigned_records,
-        fleet,
-        dist_matrix,
-        penalty_per_min=REWARD_CONFIG["penalty_per_min"],
-        use_clipping=REWARD_CONFIG["train_use_clipping"],
-        n_episodes=2500,
-    )
     final_score = float(np.mean(training_scores[-10:])) if training_scores else 0.0
     print(f"Double DQN training score (mean of last 10 eps): {final_score:,.2f}")
+    inference_start = time.perf_counter()
     ddqn_reward, ddqn_breakdown = evaluate_double_dqn_with_env(
         trained_agent,
         assigned_records,
@@ -390,6 +403,7 @@ if __name__ == "__main__":
         penalty_per_min=REWARD_CONFIG["penalty_per_min"],
         use_clipping=REWARD_CONFIG["train_use_clipping"],
     )
+    inference_seconds = time.perf_counter() - inference_start
 
     gurobi_reward, gurobi_breakdown = evaluate_schedule_with_env(
         assigned_records,
@@ -440,4 +454,21 @@ if __name__ == "__main__":
         ],
     )
     print(f"\nGurobi env-style total reward: {gurobi_reward:,.2f}")
-    print(f"Double DQN env-style total reward: {ddqn_reward:,.2f}")
+    ddqn_vs_gurobi = (ddqn_reward - gurobi_reward) / abs(gurobi_reward) if gurobi_reward else 0.0
+    print(f"Double DQN env-style total reward: {ddqn_reward:,.2f} ({ddqn_vs_gurobi:+.1%})")
+
+    print_pretty_table(
+        "TIME TAKEN (SECONDS)",
+        pd.DataFrame(
+            [
+                {"step": "Gurobi solve", "seconds": solve_seconds},
+                {"step": "Double DQN training", "seconds": train_seconds},
+                {"step": "Double DQN inference (one rollout)", "seconds": inference_seconds},
+            ]
+        ),
+    )
+
+# one may argue that it is strongly biased toward speed of learning of given algorithms - yes but we need to answer in timely manner. We can compare on which time our soultion is strong enough even in simple form.
+# we may formulate this as sending planes on purpose.
+# first comparison is to learn non disrupted schedule
+# then is to comapre with disrupted answer, and to compare with little trained disrupted to check again, as a faster reaction
